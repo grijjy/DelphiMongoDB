@@ -20,6 +20,12 @@ uses
   Grijjy.Bson;
 
 type
+  { Base class for MongoDB errors }
+  EgoMongoDBError = class(Exception);
+
+  { Is raised when a connection error (or timeout) occurs. }
+  EgoMongoDBConnectionError = class(EgoMongoDBError);
+
   { Query flags as used by TgoMongoProtocol.OpQuery }
   TgoMongoQueryFlag = (
     { Tailable means cursor is not closed when the last data is retrieved.
@@ -110,6 +116,9 @@ type
   end;
 
 type
+  { Mongo authentication mechanism }
+  TgoMongoAuthMechanism = (None, SCRAM_SHA_1, SCRAM_SHA_256);
+
   { Customizable protocol settings. }
   TgoMongoProtocolSettings = record
   public
@@ -120,6 +129,33 @@ type
     { Timeout waiting for partial or complete reply events, in milliseconds.
       Defaults to 5000 (5 seconds) }
     ReplyTimeout: Integer;
+
+    { Default query flags }
+    QueryFlags: TgoMongoQueryFlags;
+
+    { Tls enabled }
+    Secure: Boolean;
+
+    { X.509 Certificate in PEM format, if any }
+    Certificate: TBytes;
+
+    { X.509 Private key in PEM format, if any }
+    PrivateKey: TBytes;
+
+    { Password for private key, optional }
+    PrivateKeyPassword: String;
+
+    { Authentication mechanism }
+    AuthMechanism: TgoMongoAuthMechanism;
+
+    { Authentication database }
+    AuthDatabase: String;
+
+    { Authentication username }
+    Username: String;
+
+    { Authentication password }
+    Password: String;
   end;
 
 type
@@ -145,6 +181,8 @@ type
     FRecvBuffer: TBytes;
     FRecvSize: Integer;
     FRecvBufferLock: TCriticalSection;
+    FAuthErrorMessage: String;
+    FAuthErrorCode: Integer;
   private
     procedure Send(const AData: TBytes);
     function WaitForReply(const ARequestId: Integer): IgoMongoReply;
@@ -153,6 +191,11 @@ type
     function OpReplyValid(out AIndex: Integer): Boolean;
     function OpReplyMsgHeader(out AMsgHeader): Boolean;
   private
+    { Authentication }
+    function saslStart(const APayload: String): IgoMongoReply;
+    function saslContinue(const AConversationId: Integer; const APayload: String): IgoMongoReply;
+    function Authenticate: Boolean;
+
     { Connection }
     function Connect: Boolean;
     function IsConnected: Boolean;
@@ -231,13 +274,24 @@ type
         The reply to the query, or nil if the request timed out. }
     function OpGetMore(const AFullCollectionName: UTF8String;
       const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
+  public
+    { Authenticate error message if failed }
+    property AuthErrorMessage: String read FAuthErrorMessage;
+
+    { Authenticate error code if failed }
+    property AuthErrorCode: Integer read FAuthErrorCode;
   end;
+
+resourcestring
+  RS_MONGODB_AUTHENTICATION_ERROR = 'Error authenticating [%d] %s';
 
 implementation
 
 uses
   System.DateUtils,
-  Grijjy.SysUtils;
+  Grijjy.SysUtils,
+  Grijjy.Bson.IO,
+  Grijjy.Scram;
 
 type
   TMsgHeader = packed record
@@ -289,6 +343,164 @@ begin
   FreeAndNil(FClientSocketManager);
 end;
 
+function TgoMongoProtocol.saslStart(const APayload: String): IgoMongoReply;
+var
+  Writer: IgoBsonWriter;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteInt32('saslStart', 1);
+  if FSettings.AuthMechanism = TgoMongoAuthMechanism.SCRAM_SHA_1 then
+    Writer.WriteString('mechanism', 'SCRAM-SHA-1')
+  else
+    Writer.WriteString('mechanism', 'SCRAM-SHA-256');
+
+  Writer.WriteName('payload');
+  Writer.WriteBinaryData(TgoBsonBinaryData.Create(TEncoding.Utf8.GetBytes(APayload)));
+
+  Writer.WriteInt32('autoAuthorize', 1);
+  Writer.WriteEndDocument;
+
+  Result := OpQuery(Utf8String(FSettings.AuthDatabase + '.$cmd'), [], 0, -1, Writer.ToBson, nil);
+end;
+
+function TgoMongoProtocol.saslContinue(const AConversationId: Integer; const APayload: String): IgoMongoReply;
+var
+  Writer: IgoBsonWriter;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteInt32('saslContinue', 1);
+  Writer.WriteInt32('conversationId', AConversationId);
+
+  Writer.WriteName('payload');
+  Writer.WriteBinaryData(TgoBsonBinaryData.Create(TEncoding.Utf8.GetBytes(APayload)));
+  Writer.WriteEndDocument;
+
+  Result := OpQuery(Utf8String(FSettings.AuthDatabase + '.$cmd'), [], 0, -1, Writer.ToBson, nil);
+end;
+
+function TgoMongoProtocol.Authenticate: Boolean;
+var
+  Scram: TgoScram;
+  ServerFirstMsg, ServerSecondMsg: String;
+  ConversationDoc: TgoBsonDocument;
+  PayloadBinary: TgoBsonBinaryData;
+  ConversationId: Integer;
+  Ok: Boolean;
+  MongoReply: IgoMongoReply;
+begin
+  { Reset auth error code }
+  FAuthErrorMessage := '';
+  FAuthErrorCode := 0;
+
+  { Initialize our Scram helper }
+  case FSettings.AuthMechanism of
+    TgoMongoAuthMechanism.SCRAM_SHA_1:
+      Scram := TgoScram.Create(TgoScramMechanism.SCRAM_SHA_1, FSettings.Username, FSettings.Password);
+    else
+      Scram := TgoScram.Create(TgoScramMechanism.SCRAM_SHA_256, FSettings.Username, FSettings.Password);
+  end;
+
+  try
+    { Step 1 }
+    Scram.CreateFirstMsg;
+
+    { Start the initial sasl handshake }
+    MongoReply := saslStart(SCRAM_GS2_HEADER + Scram.ClientFirstMsg);
+
+    if MongoReply = nil then
+      Exit(False);
+
+    if MongoReply.Documents = nil then
+      Exit(False);
+
+    ConversationDoc := TgoBsonDocument.Load(MongoReply.Documents[0]);
+    Ok := ConversationDoc['ok'];
+    if not Ok then
+    begin
+//      {
+//        "ok" : 0.0,
+//        "errmsg" : "Authentication failed.",
+//        "code" : 18,
+//        "codeName" : "AuthenticationFailed"
+//      }
+      FAuthErrorMessage := ConversationDoc['errmsg'];
+      FAuthErrorCode := ConversationDoc['code'];
+      Exit(False);
+    end;
+
+//    {
+//      "conversationId" : 1,
+//      "done" : false,
+//      "payload" : { "$binary" : "a=b,c=d", "$type" : "00" },
+//      "ok" : 1.0
+//    }
+    { The first message from the server to the client }
+    PayloadBinary := ConversationDoc['payload'].AsBsonBinaryData;
+    ServerFirstMsg := TEncoding.Utf8.GetString(PayloadBinary.AsBytes);
+    ConversationId := ConversationDoc['conversationId'];
+
+    { Process the first message from the server to the client }
+    Scram.HandleServerFirstMsg(ConversationId, ServerFirstMsg);
+
+    { Step 2 - Send the final client message }
+    MongoReply := saslContinue(Scram.ConversationId, Scram.ClientFinalMsg);
+
+    if MongoReply = nil then
+      Exit(False);
+
+    if MongoReply.Documents = nil then
+      Exit(False);
+
+    ConversationDoc := TgoBsonDocument.Load(MongoReply.Documents[0]);
+    Ok := ConversationDoc['ok'];
+    if not Ok then
+    begin
+      FAuthErrorMessage := ConversationDoc['errmsg'];
+      FAuthErrorCode := ConversationDoc['code'];
+      Exit(False);
+    end;
+
+    { The second message from the server to the client }
+    PayloadBinary := ConversationDoc['payload'].AsBsonBinaryData;
+    ServerSecondMsg := TEncoding.Utf8.GetString(PayloadBinary.AsBytes);
+
+    { Process the second message from the server to the client }
+    Scram.HandleServerSecondMsg(ServerSecondMsg);
+
+    { Verify that the actual signature matches the servers expected signature }
+    if not Scram.ValidSignature then
+    begin
+      FAuthErrorMessage := 'Server signature does not match';
+      FAuthErrorCode := -1;
+      Exit(False);
+    end;
+
+    { Step 3 - Acknowledge with an empty payload }
+    MongoReply := saslContinue(Scram.ConversationId, '');
+
+    if MongoReply = nil then
+      Exit(False);
+
+    if MongoReply.Documents = nil then
+      Exit(False);
+
+    ConversationDoc := TgoBsonDocument.Load(MongoReply.Documents[0]);
+    Ok := ConversationDoc['ok'];
+    if not Ok then
+    begin
+      FAuthErrorMessage := ConversationDoc['errmsg'];
+      FAuthErrorCode := ConversationDoc['code'];
+      Exit(False);
+    end;
+
+    Result := (ConversationDoc['done'] = True);
+  finally
+    Scram.Free;
+  end;
+end;
+
 function TgoMongoProtocol.Connect: Boolean;
 var
   Connection: TgoSocketConnection;
@@ -325,12 +537,43 @@ begin
   begin
     FConnectionLock.Acquire;
     try
+      { Enable or disable Tls support }
+      FConnection.SSL := FSettings.Secure;
+
+      { Pass host name for Server Name Indication (SNI) for Tls }
+      if FConnection.SSL then
+      begin
+        FConnection.OpenSSL.Host := FHost;
+        FConnection.OpenSSL.Port := FPort;
+      end;
+
+      { Apply X.509 certificate }
+      FConnection.Certificate := FSettings.Certificate;
+      FConnection.PrivateKey := FSettings.PrivateKey;
+      FConnection.Password := FSettings.PrivateKeyPassword;
+
       if FConnection.Connect then
         WaitForConnected;
     finally
       FConnectionLock.Release;
     end;
-    Result := (ConnectionState = TgoConnectionState.Connected);
+
+    if ConnectionState <> TgoConnectionState.Connected then
+      Exit(False);
+
+    { No authentication }
+    if FSettings.AuthMechanism = TgoMongoAuthMechanism.None then
+      Exit(True);
+
+    { SCRAM Authenticate }
+    if not Authenticate then
+    begin
+      raise EgoMongoDBConnectionError.Create(Format(RS_MONGODB_AUTHENTICATION_ERROR, [FAuthErrorCode, FAuthErrorMessage]));
+      FConnection.Disconnect;
+      Exit(False);
+    end;
+
+    Result := True;
   end;
 end;
 
@@ -473,7 +716,7 @@ begin
   Data := TgoByteBuffer.Create(Header.MessageLength);
   try
     Data.AppendBuffer(Header, SizeOf(TMsgHeader));
-    I := Byte(AFlags);
+    I := Byte(AFlags) or Byte(FSettings.QueryFlags);
     Data.AppendBuffer(I, SizeOf(Int32));
     Data.AppendBuffer(AFullCollectionName[Low(UTF8String)], Length(AFullCollectionName) + 1);
     Data.AppendBuffer(ANumberToSkip, SizeOf(Int32));

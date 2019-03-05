@@ -260,12 +260,6 @@ type
     OBSOLETE_PrepareConfigsFailed = 13104);
 
 type
-  { Base class for MongoDB errors }
-  EgoMongoDBError = class(Exception);
-
-  { Is raised when a connection error (or timeout) occurs. }
-  EgoMongoDBConnectionError = class(EgoMongoDBError);
-
   { Is raised when there is an error writing to the database }
   EgoMongoDBWriteError = class(EgoMongoDBError)
   {$REGION 'Internal Declarations'}
@@ -569,6 +563,33 @@ type
     { Timeout waiting for partial or complete reply events, in milliseconds.
       Defaults to 5000 (5 seconds) }
     ReplyTimeout: Integer;
+
+    { Default query flags }
+    QueryFlags: TgoMongoQueryFlags;
+
+    { Tls enabled }
+    Secure: Boolean;
+
+    { X.509 Certificate in PEM format, if any }
+    Certificate: TBytes;
+
+    { X.509 Private key in PEM format, if any }
+    PrivateKey: TBytes;
+
+    { Password for private key, optional }
+    PrivateKeyPassword: String;
+
+    { Authentication mechanism }
+    AuthMechanism: TgoMongoAuthMechanism;
+
+    { Authentication database }
+    AuthDatabase: String;
+
+    { Authentication username }
+    Username: String;
+
+    { Authentication password }
+    Password: String;
   public
     { Creates a settings record with the default settings }
     class function Create: TgoMongoClientSettings; static;
@@ -858,6 +879,15 @@ class function TgoMongoClientSettings.Create: TgoMongoClientSettings;
 begin
   Result.ConnectionTimeout := 5000;
   Result.ReplyTimeout := 5000;
+  Result.QueryFlags := [];
+  Result.Secure := False;
+  Result.Certificate := nil;
+  Result.PrivateKey := nil;
+  Result.PrivateKeyPassword := '';
+  Result.AuthMechanism := TgoMongoAuthMechanism.None;
+  Result.AuthDatabase := '';
+  Result.Username := '';
+  Result.Password := '';
 end;
 
 { TgoMongoClient }
@@ -875,6 +905,15 @@ begin
   inherited Create;
   S.ConnectionTimeout := ASettings.ConnectionTimeout;
   S.ReplyTimeout := ASettings.ReplyTimeout;
+  S.QueryFlags := ASettings.QueryFlags;
+  S.Secure := ASettings.Secure;
+  S.Certificate := ASettings.Certificate;
+  S.PrivateKey := ASettings.PrivateKey;
+  S.PrivateKeyPassword := ASettings.PrivateKeyPassword;
+  S.AuthMechanism := ASettings.AuthMechanism;
+  S.AuthDatabase := ASettings.AuthDatabase;
+  S.Username := ASettings.Username;
+  S.Password := ASettings.Password;
   FProtocol := TgoMongoProtocol.Create(AHost, APort, S);
 end;
 
