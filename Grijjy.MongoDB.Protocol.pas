@@ -899,6 +899,14 @@ begin
 
   if (Result = nil) then
     TryGetReply(ARequestId, Result);
+
+  FRepliesLock.Acquire;
+  try
+    FPartialReplies.Remove(ARequestId);
+    FCompletedReplies.Remove(ARequestId);
+  finally
+    FRepliesLock.Release;
+  end;
 end;
 
 { TgoMongoReply }
