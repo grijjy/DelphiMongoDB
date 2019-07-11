@@ -31,13 +31,13 @@ type
     { Tailable means cursor is not closed when the last data is retrieved.
       Rather, the cursor marks the final object’s position.
       You can resume using the cursor later, from where it was located,
-      if more data were received. Like any “latent cursor”, the cursor may
-      become invalid at some point (CursorNotFound) – for example if the final
+      if more data were received. Like any “latent cursor? the cursor may
+      become invalid at some point (CursorNotFound) ?for example if the final
       object it references were deleted. }
     TailableCursor = 1,
 
     { Allow query of replica slave. Normally these return an error except for
-      namespace “local”. }
+      namespace “local? }
     SlaveOk = 2,
 
     { Internal replication use only - driver should not set. }
@@ -53,7 +53,7 @@ type
       as normal. }
     AwaitData = 5,
 
-    { Stream the data down full blast in multiple “more” packages, on the
+    { Stream the data down full blast in multiple “more?packages, on the
       assumption that the client will fully read all data queried. Faster when
       you are pulling a lot of data and know you want to pull it all down.
       Note: the client is not allowed to not read all the data unless it closes the connection. }
@@ -72,7 +72,7 @@ type
     CursorNotFound = 0,
 
     { Is set when query failed. Results consist of one document containing an
-      “$err” field describing the failure. }
+      ?err?field describing the failure. }
     QueryFailure = 1,
 
     { Drivers should ignore this. Only mongos will ever see this set, in which
@@ -839,7 +839,7 @@ begin
           FPartialReplies.Remove(MongoReply.ResponseTo);
 
           { Add the completed reply to the dictionary }
-          FCompletedReplies.Add(MongoReply.ResponseTo, MongoReply);
+          FCompletedReplies.AddOrSetValue(MongoReply.ResponseTo, MongoReply);
         finally
           FRepliesLock.Release;
         end;
