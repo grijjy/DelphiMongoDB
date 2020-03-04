@@ -544,6 +544,16 @@ type
     function Count: Integer; overload;
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
 
+    { Creates an index in the current collection.
+
+      Parameters:
+        AName: Name of the index.
+        AKeyFields: List of fields to build the index.
+
+      Returns:
+        Created or not. }
+    function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean; overload;
+
     { The database that contains this collection. }
     property Database: IgoMongoDatabase read _GetDatabase;
 
@@ -859,6 +869,8 @@ type
 
     function Count: Integer; overload;
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
+
+    function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
   {$ENDREGION 'Internal Declarations'}
   public
     constructor Create(const ADatabase: TgoMongoDatabase; const AName: String);
@@ -1226,6 +1238,37 @@ begin
   FFullCommandCollectionName := ADatabase.FullCommandCollectionName;
   FProtocol := ADatabase.Protocol;
   Assert(FProtocol <> nil);
+end;
+
+function TgoMongoCollection.CreateIndex(const AName : String;
+  const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
+// https://docs.mongodb.com/manual/reference/command/createIndexes/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  i: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('createIndexes', FName);
+
+  Writer.WriteStartArray('indexes');
+  Writer.WriteStartDocument;
+  Writer.WriteStartDocument('key');
+  for i:=0 to High(AKeyFields) do
+    Writer.WriteInt32(AKeyFields[i],1);
+  Writer.WriteEndDocument;
+  Writer.WriteString('name', AName);
+  Writer.WriteBoolean('unique', AUnique);
+  Writer.WriteEndDocument;
+  Writer.WriteEndArray;
+
+  AddWriteConcern(Writer);
+
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 1);
 end;
 
 function TgoMongoCollection.Delete(const AFilter: TgoMongoFilter;
