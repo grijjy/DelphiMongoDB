@@ -554,6 +554,23 @@ type
         Created or not. }
     function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean; overload;
 
+    { Drops an index in the current collection.
+
+      Parameters:
+        AName: Name of the index.
+
+      Returns:
+        Dropped or not. }
+    function DropIndex(const AName : String): Boolean; overload;
+
+    { List all index names in the current collection.
+
+      Returns:
+        TArray<String> of index names. }
+    function ListIndexNames: TArray<String>; overload;
+    function ListIndexes: TArray<TgoBsonDocument>; overload;
+
+
     { The database that contains this collection. }
     property Database: IgoMongoDatabase read _GetDatabase;
 
@@ -871,6 +888,9 @@ type
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
 
     function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
+    function DropIndex(const AName : String): Boolean;
+    function ListIndexNames: TArray<String>;
+    function ListIndexes: TArray<TgoBsonDocument>;
   {$ENDREGION 'Internal Declarations'}
   public
     constructor Create(const ADatabase: TgoMongoDatabase; const AName: String);
@@ -1269,6 +1289,70 @@ begin
 
   Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 1);
+end;
+
+function TgoMongoCollection.DropIndex(const AName : String): Boolean;
+// https://docs.mongodb.com/manual/reference/command/dropIndexes/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('dropIndexes', FName);
+  Writer.WriteString('index', AName);
+
+  AddWriteConcern(Writer);
+
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 1);
+end;
+
+function TgoMongoCollection.ListIndexNames: TArray<String>;
+// https://docs.mongodb.com/manual/reference/command/listIndexes/
+var
+  Docs: TArray<TgoBsonDocument>;
+  I: Integer;
+begin
+  Docs := ListIndexes;
+  SetLength(Result, Length(Docs));
+  for I := 0 to Length(Docs) - 1 do
+    Result[I] := Docs[I]['name'];
+end;
+
+function TgoMongoCollection.ListIndexes: TArray<TgoBsonDocument>;
+// https://docs.mongodb.com/manual/reference/command/listIndexes/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  Doc, Cursor: TgoBsonDocument;
+  Value: TgoBsonValue;
+  Docs: TgoBsonArray;
+  I: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('listIndexes', FName);
+  Writer.WriteEndDocument;
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+  if (Reply.Documents = nil) then
+    Exit(nil);
+
+  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+  if (not Doc.TryGetValue('cursor', Value)) then
+    Exit(nil);
+  Cursor := Value.AsBsonDocument;
+
+  if (not Cursor.TryGetValue('firstBatch', Value)) then
+    Exit(nil);
+
+  Docs := Value.AsBsonArray;
+  SetLength(Result, Docs.Count);
+  for I := 0 to Docs.Count - 1 do
+    Result[I] := Docs[I].AsBsonDocument;
 end;
 
 function TgoMongoCollection.Delete(const AFilter: TgoMongoFilter;
