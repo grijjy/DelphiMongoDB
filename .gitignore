@@ -1,1 +1,4 @@
 dunitx-results.xml
+*.~*
+*.dcu
+*.o

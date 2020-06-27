@@ -513,7 +513,7 @@ type
       const ASort: TgoMongoSort): IgoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection;
-      const ASort: TgoMongoSort): IgoMongoCursor; overload;
+      const ASort: TgoMongoSort; const ANumberToSkip : Integer = 0): IgoMongoCursor; overload;
 
     { Finds the first document matching the filter.
 
@@ -549,10 +549,27 @@ type
       Parameters:
         AName: Name of the index.
         AKeyFields: List of fields to build the index.
+        AUnique: Defines a unique index.
 
       Returns:
         Created or not. }
-    function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean; overload;
+    function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
+
+    { Creates an text index in the current collection.
+
+      Parameters:
+        AName: Name of the index.
+        AFields: List of fields to build the index.
+        ALanguageOverwriteField: Defines a field that contains the language to
+          use for a specific document.
+        ADefaultLanguage: Defines the default language for internal indexing.
+
+        See https://docs.mongodb.com/manual/reference/text-search-languages/#text-search-languages
+          for language definitions.
+
+      Returns:
+        Created or not. }
+    function CreateTextIndex(const AName : String; const AFields : Array of String; const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'english'): Boolean;
 
     { Drops an index in the current collection.
 
@@ -842,7 +859,7 @@ type
     function Update(const AFilter: TgoMongoFilter;
       const AUpdate: TgoMongoUpdate; const AUpsert, AOrdered,
       AMulti: Boolean): Integer;
-    function Find(const AFilter, AProjection: TBytes): IgoMongoCursor; overload;
+    function Find(const AFilter, AProjection: TBytes; const ANumberToSkip : Integer = 0): IgoMongoCursor; overload;
     function FindOne(const AFilter, AProjection: TBytes): TgoBsonDocument; overload;
   private
     class function AddModifier(const AFilter: TgoMongoFilter;
@@ -879,7 +896,7 @@ type
       const ASort: TgoMongoSort): IgoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection;
-      const ASort: TgoMongoSort): IgoMongoCursor; overload;
+      const ASort: TgoMongoSort; const ANumberToSkip : Integer = 0): IgoMongoCursor; overload;
     function FindOne(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
@@ -888,6 +905,7 @@ type
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
 
     function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
+    function CreateTextIndex(const AName : String; const AFields : Array of String; const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'english'): Boolean;
     function DropIndex(const AName : String): Boolean;
     function ListIndexNames: TArray<String>;
     function ListIndexes: TArray<TgoBsonDocument>;
@@ -1291,6 +1309,44 @@ begin
   Result := (HandleCommandReply(Reply) = 1);
 end;
 
+function TgoMongoCollection.CreateTextIndex(const AName : String;
+  const AFields : Array of String; const ALanguageOverwriteField : String = '';
+  const ADefaultLanguage : String = 'english'): Boolean;
+// https://docs.mongodb.com/manual/core/index-text/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  i: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('createIndexes', FName);
+
+  Writer.WriteStartArray('indexes');
+  Writer.WriteStartDocument;
+  Writer.WriteStartDocument('key');
+  for i:=0 to High(AFields) do
+    Writer.WriteString(AFields[i],'text');
+  Writer.WriteEndDocument;
+  Writer.WriteString('name', AName);
+
+  if ADefaultLanguage.IsEmpty = false
+    then Writer.WriteString('default_language', ADefaultLanguage);
+
+  if ALanguageOverwriteField.IsEmpty = false
+    then Writer.WriteString('language_override', ALanguageOverwriteField);
+
+  Writer.WriteEndDocument;
+  Writer.WriteEndArray;
+
+  AddWriteConcern(Writer);
+
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 1);
+end;
+
 function TgoMongoCollection.DropIndex(const AName : String): Boolean;
 // https://docs.mongodb.com/manual/reference/command/dropIndexes/
 var
@@ -1423,18 +1479,18 @@ end;
 
 function TgoMongoCollection.Find(const AFilter: TgoMongoFilter;
   const AProjection: TgoMongoProjection;
-  const ASort: TgoMongoSort): IgoMongoCursor;
+  const ASort: TgoMongoSort; const ANumberToSkip : Integer = 0): IgoMongoCursor;
 begin
-  Result := Find(AddModifier(AFilter, ASort), AProjection.ToBson);
+  Result := Find(AddModifier(AFilter, ASort), AProjection.ToBson, ANumberToSkip);
 end;
 
 function TgoMongoCollection.Find(const AFilter,
-  AProjection: TBytes): IgoMongoCursor;
+  AProjection: TBytes; const ANumberToSkip : Integer = 0): IgoMongoCursor;
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
 var
   Reply: IgoMongoReply;
 begin
-  Reply := FProtocol.OpQuery(FFullName, [], 0, 0, AFilter, AProjection);
+  Reply := FProtocol.OpQuery(FFullName, [], ANumberToSkip, 0, AFilter, AProjection);
   HandleTimeout(Reply);
   Result := TgoMongoCursor.Create(FProtocol, FFullName, Reply.Documents, Reply.CursorId);
 end;
