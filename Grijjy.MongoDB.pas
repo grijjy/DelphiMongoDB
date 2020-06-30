@@ -1306,7 +1306,7 @@ begin
   Writer.WriteEndDocument;
 
   Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
-  Result := (HandleCommandReply(Reply) = 1);
+  Result := (HandleCommandReply(Reply) = 0);
 end;
 
 function TgoMongoCollection.CreateTextIndex(const AName : String;
@@ -1344,7 +1344,7 @@ begin
   Writer.WriteEndDocument;
 
   Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
-  Result := (HandleCommandReply(Reply) = 1);
+  Result := (HandleCommandReply(Reply) = 0);
 end;
 
 function TgoMongoCollection.DropIndex(const AName : String): Boolean;
@@ -1363,7 +1363,7 @@ begin
   Writer.WriteEndDocument;
 
   Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
-  Result := (HandleCommandReply(Reply) = 1);
+  Result := (HandleCommandReply(Reply) = 0);
 end;
 
 function TgoMongoCollection.ListIndexNames: TArray<String>;
