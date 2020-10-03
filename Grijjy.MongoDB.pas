@@ -8,10 +8,73 @@ interface
 uses
   System.SysUtils,
   System.Generics.Collections,
+
   Grijjy.Bson,
   Grijjy.Bson.IO,
   Grijjy.MongoDB.Protocol,
   Grijjy.MongoDB.Queries;
+
+type
+  { MongoDB validation types
+    https://docs.mongodb.com/manual/reference/command/create/ }
+  TgoMongoValidationLevel = (vlOff, vlStrict, vlModerate);
+  TgoMongoValidationLevelHelper = record helper for TgoMongoValidationLevel
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoValidationAction = (vaError, vaWarn);
+  TgoMongoValidationActionHelper = record helper for TgoMongoValidationAction
+  public
+    function ToString : String;
+  end;
+
+type
+  { MongoDB collation
+    https://docs.mongodb.com/manual/reference/collation/ }
+
+  TgoMongoCollationCaseFirst = (ccfUpper, ccfLower, ccfOff);
+  TgoMongoCollationCaseFirstHelper = record helper for TgoMongoCollationCaseFirst
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoCollationAlternate = (caNonIgnorable, caShifted);
+  TgoMongoCollationAlternateHelper = record helper for TgoMongoCollationAlternate
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoCollationMaxVariable = (cmvPunct, cmvSpace);
+  TgoMongoCollationMaxVariableHelper = record helper for TgoMongoCollationMaxVariable
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoCollation = record
+  public
+    Locale          : String;
+    CaseLevel       : Boolean;
+    CaseFirst       : TgoMongoCollationCaseFirst;
+    Strength        : Integer;
+    NumericOrdering : Boolean;
+    Alternate       : TgoMongoCollationAlternate;
+    MaxVariable     : TgoMongoCollationMaxVariable;
+    Backwards       : Boolean;
+  end;
+
+const
+  { MongoDB collation default settings
+    https://docs.mongodb.com/manual/reference/collation-locales-defaults/#collation-languages-locales }
+  DEFAULTTGOMONGOCOLLATION : TgoMongoCollation = (
+    Locale          : 'en';
+    CaseLevel       : false;
+    CaseFirst       : TgoMongoCollationCaseFirst.ccfOff;
+    Strength        : 1;
+    NumericOrdering : false;
+    Alternate       : TgoMongoCollationAlternate.caNonIgnorable;
+    MaxVariable     : TgoMongoCollationMaxVariable.cmvSpace;
+    Backwards       : false; );
 
 type
   { MongoDB error codes }
@@ -357,6 +420,15 @@ type
       querying it. }
     function GetCollection(const AName: String): IgoMongoCollection;
 
+    { Creates a collection.
+
+      All parameters are described here:
+      https://docs.mongodb.com/manual/reference/command/create/ }
+    function CreateCollection(const AName : String; const ACapped : Boolean; const AMaxSize : Int64;
+      const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
+      const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
+      const ACollation : TgoMongoCollation) : Boolean;
+
     { The client used for this database. }
     property Client: IgoMongoClient read _GetClient;
 
@@ -569,7 +641,8 @@ type
 
       Returns:
         Created or not. }
-    function CreateTextIndex(const AName : String; const AFields : Array of String; const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'english'): Boolean;
+    function CreateTextIndex(const AName : String; const AFields : Array of String;
+      const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'en'): Boolean;
 
     { Drops an index in the current collection.
 
@@ -586,7 +659,6 @@ type
         TArray<String> of index names. }
     function ListIndexNames: TArray<String>; overload;
     function ListIndexes: TArray<TgoBsonDocument>; overload;
-
 
     { The database that contains this collection. }
     property Database: IgoMongoDatabase read _GetDatabase;
@@ -791,6 +863,11 @@ type
     function ListCollections: TArray<TgoBsonDocument>;
     procedure DropCollection(const AName: String);
     function GetCollection(const AName: String): IgoMongoCollection;
+
+    function CreateCollection(const AName : String; const ACapped : Boolean; const AMaxSize : Int64;
+      const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
+      const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
+      const ACollation : TgoMongoCollation) : Boolean;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
@@ -904,8 +981,10 @@ type
     function Count: Integer; overload;
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
 
-    function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
-    function CreateTextIndex(const AName : String; const AFields : Array of String; const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'english'): Boolean;
+    function CreateIndex(const AName : String; const AKeyFields : Array of String;
+      const AUnique : Boolean = false): Boolean;
+    function CreateTextIndex(const AName : String; const AFields : Array of String;
+      const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'en'): Boolean;
     function DropIndex(const AName : String): Boolean;
     function ListIndexNames: TArray<String>;
     function ListIndexes: TArray<TgoBsonDocument>;
@@ -1071,6 +1150,54 @@ function TgoMongoDatabase.GetCollection(
   const AName: String): IgoMongoCollection;
 begin
   Result := TgoMongoCollection.Create(Self, AName);
+end;
+
+function TgoMongoDatabase.CreateCollection(const AName: String;
+  const ACapped: Boolean; const AMaxSize, AMaxDocuments: Int64;
+  const AValidationLevel: TgoMongoValidationLevel;
+  const AValidationAction: TgoMongoValidationAction;
+  const AValidator: TgoBsonDocument; const ACollation: TgoMongoCollation): Boolean;
+// https://docs.mongodb.com/manual/reference/method/db.createCollection/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  i: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+
+  Writer.WriteStartDocument;
+  Writer.WriteString('create', AName);
+
+  Writer.WriteBoolean('capped', ACapped);
+  if ACapped = true then
+  begin
+    Writer.WriteInt64('size',AMaxSize);
+    Writer.WriteInt64('max',AMaxDocuments);
+  end;
+
+  if AValidator.IsNil = false then
+  begin
+    Writer.WriteName('validator');
+    Writer.WriteRawBsonDocument(AValidator.ToBson);
+    Writer.WriteString('validationLevel',AValidationLevel.ToString);
+    Writer.WriteString('validationAction',AValidationAction.ToString);
+  end;
+
+  Writer.WriteName('collation');
+  Writer.WriteStartDocument;
+  Writer.WriteString('locale',ACollation.Locale);
+  Writer.WriteBoolean('caseLevel',ACollation.CaseLevel);
+  Writer.WriteString('caseFirst',ACollation.CaseFirst.ToString);
+  Writer.WriteInt32('strength',ACollation.Strength);
+  Writer.WriteBoolean('numericOrdering',ACollation.NumericOrdering);
+  Writer.WriteString('alternate',ACollation.Alternate.ToString);
+  Writer.WriteString('maxVariable',ACollation.MaxVariable.ToString);
+  Writer.WriteBoolean('backwards',ACollation.Backwards);
+  Writer.WriteEndDocument;
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
 end;
 
 function TgoMongoDatabase.ListCollectionNames: TArray<String>;
@@ -1311,7 +1438,7 @@ end;
 
 function TgoMongoCollection.CreateTextIndex(const AName : String;
   const AFields : Array of String; const ALanguageOverwriteField : String = '';
-  const ADefaultLanguage : String = 'english'): Boolean;
+  const ADefaultLanguage : String = 'en'): Boolean;
 // https://docs.mongodb.com/manual/core/index-text/
 var
   Writer: IgoBsonWriter;
@@ -1661,6 +1788,63 @@ end;
 function TgoMongoCollection._GetName: String;
 begin
   Result := FName;
+end;
+
+{ TgoMongoValidationLevelHelper }
+
+function TgoMongoValidationLevelHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoValidationLevel.vlOff      : Result := 'off';
+    TgoMongoValidationLevel.vlStrict   : Result := 'strict';
+    TgoMongoValidationLevel.vlModerate : Result := 'moderate';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoValidationActionHelper }
+
+function TgoMongoValidationActionHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoValidationAction.vaError : Result := 'error';
+    TgoMongoValidationAction.vaWarn  : Result := 'warn';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoCollationCaseFirstHelper }
+
+function TgoMongoCollationCaseFirstHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoCollationCaseFirst.ccfUpper : Result := 'upper';
+    TgoMongoCollationCaseFirst.ccfLower : Result := 'lower';
+    TgoMongoCollationCaseFirst.ccfOff   : Result := 'off';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoCollationAlternateHelper }
+
+function TgoMongoCollationAlternateHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoCollationAlternate.caNonIgnorable : Result := 'non-ignorable';
+    TgoMongoCollationAlternate.caShifted      : Result := 'shifted';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoCollationMaxVariableHelper }
+
+function TgoMongoCollationMaxVariableHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoCollationMaxVariable.cmvPunct : Result := 'punct';
+    TgoMongoCollationMaxVariable.cmvSpace : Result := 'space';
+    else raise Exception.Create('invalid type');
+  end;
 end;
 
 end.
