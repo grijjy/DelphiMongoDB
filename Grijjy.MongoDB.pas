@@ -366,7 +366,7 @@ type
       described here:
       https://docs.mongodb.com/manual/reference/command/isMaster/
     }
-    function IsMaster(const SaslSupportedMechs: String = ''; Comment: String = '') : TgoBsonDocument;
+    function IsMaster(const ASaslSupportedMechs: String = ''; const AComment: String = '') : TgoBsonDocument;
 
     { Drops the database with the specified name.
 
@@ -740,9 +740,9 @@ type
     { IgoMongoClient }
     function ListDatabaseNames: TArray<String>;
     function ListDatabases: TArray<TgoBsonDocument>;
-    function IsMaster(const SaslSupportedMechs: String = ''; Comment: String = ''): TgoBsonDocument;
     procedure DropDatabase(const AName: String);
     function GetDatabase(const AName: String): IgoMongoDatabase;
+    function IsMaster(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoBsonDocument;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
   {$ENDREGION 'Internal Declarations'}
@@ -1130,7 +1130,7 @@ begin
     Result[I] := Databases[I].AsBsonDocument;
 end;
 
-function TgoMongoClient.IsMaster(const SaslSupportedMechs: String = ''; Comment: String = ''): TgoBsonDocument;
+function TgoMongoClient.IsMaster(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoBsonDocument;
 // https://docs.mongodb.com/manual/reference/command/isMaster/
 var
   Writer: IgoBsonWriter;
@@ -1143,11 +1143,11 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteInt32('isMaster', 1);
-  if (Length(SaslSupportedMechs) > 0) then
+  if (Length(ASaslSupportedMechs) > 0) then
   begin
-    Writer.WriteString('saslSupportedMechs', SaslSupportedMechs);
-    if (Length(SaslSupportedMechs) > 0) then
-      Writer.WriteString('Comment', Comment);
+    Writer.WriteString('saslSupportedMechs', ASaslSupportedMechs);
+    if (Length(ASaslSupportedMechs) > 0) then
+      Writer.WriteString('Comment', AComment);
   end;
   Writer.WriteEndDocument;
   Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
