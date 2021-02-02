@@ -63,6 +63,32 @@ type
     Backwards       : Boolean;
   end;
 
+  TgoMongoInstance = record
+  public
+    Host : String;
+    Port : Word;
+  public
+    constructor Create(AInstance : String); overload;
+    constructor Create(AHost : String; APort : Word); overload;
+  end;
+  TgoMongoInstances = TArray<TgoMongoInstance>;
+
+  TgoMongoInstanceInfo = record
+  public
+    Hosts        : TgoMongoInstances;
+    Arbiters     : TgoMongoInstances;
+    Primary      : TgoMongoInstance;
+    Me           : TgoMongoInstance;
+    SetName      : String;
+    SetVersion   : Integer;
+    IsMaster     : Boolean;
+    IsSecondary  : Boolean;
+    ArbiterOnly  : Boolean;
+    LocalTime    : TDateTime;
+    ConnectionId : Integer;
+    ReadOnly     : Boolean;
+  end;
+
 const
   { MongoDB collation default settings
     https://docs.mongodb.com/manual/reference/collation-locales-defaults/#collation-languages-locales }
@@ -366,7 +392,8 @@ type
       described here:
       https://docs.mongodb.com/manual/reference/command/isMaster/
     }
-    function IsMaster(const ASaslSupportedMechs: String = ''; const AComment: String = '') : TgoBsonDocument;
+    function GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = '') : TgoMongoInstanceInfo;
+    function IsMaster : Boolean;
 
     { Drops the database with the specified name.
 
@@ -742,7 +769,8 @@ type
     function ListDatabases: TArray<TgoBsonDocument>;
     procedure DropDatabase(const AName: String);
     function GetDatabase(const AName: String): IgoMongoDatabase;
-    function IsMaster(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoBsonDocument;
+    function GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoMongoInstanceInfo;
+    function IsMaster : Boolean;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
   {$ENDREGION 'Internal Declarations'}
@@ -1130,12 +1158,13 @@ begin
     Result[I] := Databases[I].AsBsonDocument;
 end;
 
-function TgoMongoClient.IsMaster(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoBsonDocument;
+function TgoMongoClient.GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoMongoInstanceInfo;
 // https://docs.mongodb.com/manual/reference/command/isMaster/
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
   Doc: TgoBsonDocument;
+  InstArray: TgoBsonArray;
   Databases: TgoBsonArray;
   Value: TgoBsonValue;
   I: Integer;
@@ -1146,14 +1175,50 @@ begin
   if (Length(ASaslSupportedMechs) > 0) then
   begin
     Writer.WriteString('saslSupportedMechs', ASaslSupportedMechs);
-    if (Length(ASaslSupportedMechs) > 0) then
+    if (Length(AComment) > 0) then
       Writer.WriteString('Comment', AComment);
   end;
   Writer.WriteEndDocument;
   Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 
-  Result := TgoBsonDocument.Load(Reply.Documents[0]);
+  if not(Reply.Documents = nil) then
+  begin
+    Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+
+    Result.Primary      := TgoMongoInstance.Create(Doc.Get('primary','').ToString);
+    Result.Me           := TgoMongoInstance.Create(Doc.Get('me','').ToString);
+    Result.SetName      := Doc.Get('setName','').ToString;
+    Result.SetVersion   := Doc.Get('setVersion',0).ToInteger;
+    Result.IsMaster     := Doc.Get('ismaster',false).ToBoolean;
+    Result.IsSecondary  := Doc.Get('secondary',false).ToBoolean;
+    Result.ArbiterOnly  := Doc.Get('arbiterOnly',false).ToBoolean;
+    Result.LocalTime    := Doc.Get('localTime',0).ToUniversalTime;
+    Result.ConnectionId := Doc.Get('connectionId',0).ToInteger;
+    Result.ReadOnly     := Doc.Get('readOnly',true).ToBoolean;
+
+    if Doc.Contains('hosts') then
+    begin
+      InstArray := Doc.Get('hosts','').AsBsonArray;
+      SetLength(Result.Hosts,InstArray.Count);
+      for I := 0 to InstArray.Count-1 do
+        Result.Hosts[i] := TgoMongoInstance.Create(InstArray.Items[i].ToString);
+    end else Result.Hosts := nil;
+
+    if Doc.Contains('arbiters') then
+    begin
+      InstArray := Doc.Get('arbiters','').AsBsonArray;
+      SetLength(Result.Arbiters,InstArray.Count);
+      for I := 0 to InstArray.Count-1 do
+        Result.Arbiters[i] := TgoMongoInstance.Create(InstArray.Items[i].ToString);
+    end else Result.Arbiters := nil;
+
+  end else raise Exception.Create('invalid response');
+end;
+
+function TgoMongoClient.IsMaster: Boolean;
+begin
+  Result := Self.GetInstanceInfo().IsMaster;
 end;
 
 { TgoMongoDatabase }
@@ -1883,6 +1948,28 @@ begin
     TgoMongoCollationMaxVariable.cmvPunct : Result := 'punct';
     TgoMongoCollationMaxVariable.cmvSpace : Result := 'space';
     else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoInstance }
+
+constructor TgoMongoInstance.Create(AHost: String; APort: Word);
+begin
+  Self.Host := AHost;
+  Self.Port := APort;
+end;
+
+constructor TgoMongoInstance.Create(AInstance: String);
+begin
+  try
+    if AInstance.Contains(':') = true then
+    begin
+      Self.Host := Copy(AInstance,1,Pos(':',AInstance)-1).Trim;
+      Self.Port := Copy(AInstance,Pos(':',AInstance)+1,AInstance.Length).Trim.ToInteger;
+    end;
+  except
+    Self.Host := '';
+    Self.Port := 0;
   end;
 end;
 
