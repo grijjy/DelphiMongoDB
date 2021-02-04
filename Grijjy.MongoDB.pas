@@ -8,10 +8,99 @@ interface
 uses
   System.SysUtils,
   System.Generics.Collections,
+
   Grijjy.Bson,
   Grijjy.Bson.IO,
   Grijjy.MongoDB.Protocol,
   Grijjy.MongoDB.Queries;
+
+type
+  { MongoDB validation types
+    https://docs.mongodb.com/manual/reference/command/create/ }
+  TgoMongoValidationLevel = (vlOff, vlStrict, vlModerate);
+  TgoMongoValidationLevelHelper = record helper for TgoMongoValidationLevel
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoValidationAction = (vaError, vaWarn);
+  TgoMongoValidationActionHelper = record helper for TgoMongoValidationAction
+  public
+    function ToString : String;
+  end;
+
+type
+  { MongoDB collation
+    https://docs.mongodb.com/manual/reference/collation/ }
+
+  TgoMongoCollationCaseFirst = (ccfUpper, ccfLower, ccfOff);
+  TgoMongoCollationCaseFirstHelper = record helper for TgoMongoCollationCaseFirst
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoCollationAlternate = (caNonIgnorable, caShifted);
+  TgoMongoCollationAlternateHelper = record helper for TgoMongoCollationAlternate
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoCollationMaxVariable = (cmvPunct, cmvSpace);
+  TgoMongoCollationMaxVariableHelper = record helper for TgoMongoCollationMaxVariable
+  public
+    function ToString : String;
+  end;
+
+  TgoMongoCollation = record
+  public
+    Locale          : String;
+    CaseLevel       : Boolean;
+    CaseFirst       : TgoMongoCollationCaseFirst;
+    Strength        : Integer;
+    NumericOrdering : Boolean;
+    Alternate       : TgoMongoCollationAlternate;
+    MaxVariable     : TgoMongoCollationMaxVariable;
+    Backwards       : Boolean;
+  end;
+
+  TgoMongoInstance = record
+  public
+    Host : String;
+    Port : Word;
+  public
+    constructor Create(AInstance : String); overload;
+    constructor Create(AHost : String; APort : Word); overload;
+  end;
+  TgoMongoInstances = TArray<TgoMongoInstance>;
+
+  TgoMongoInstanceInfo = record
+  public
+    Hosts        : TgoMongoInstances;
+    Arbiters     : TgoMongoInstances;
+    Primary      : TgoMongoInstance;
+    Me           : TgoMongoInstance;
+    SetName      : String;
+    SetVersion   : Integer;
+    IsMaster     : Boolean;
+    IsSecondary  : Boolean;
+    ArbiterOnly  : Boolean;
+    LocalTime    : TDateTime;
+    ConnectionId : Integer;
+    ReadOnly     : Boolean;
+  end;
+
+const
+  { MongoDB collation default settings
+    https://docs.mongodb.com/manual/reference/collation-locales-defaults/#collation-languages-locales }
+  DEFAULTTGOMONGOCOLLATION : TgoMongoCollation = (
+    Locale          : 'en';
+    CaseLevel       : false;
+    CaseFirst       : TgoMongoCollationCaseFirst.ccfOff;
+    Strength        : 1;
+    NumericOrdering : false;
+    Alternate       : TgoMongoCollationAlternate.caNonIgnorable;
+    MaxVariable     : TgoMongoCollationMaxVariable.cmvSpace;
+    Backwards       : false; );
 
 type
   { MongoDB error codes }
@@ -293,6 +382,19 @@ type
       https://docs.mongodb.com/manual/reference/command/listDatabases/ }
     function ListDatabases: TArray<TgoBsonDocument>;
 
+    { Returns a document that describes the role of the mongod instance. If the optional
+      field saslSupportedMechs is specified, the command also returns an array of
+      SASL mechanisms used to create the specified user’s credentials.
+      If the instance is a member of a replica set, then isMaster returns a subset
+      of the replica set configuration and status including whether or not the instance
+      is the primary of the replica set.
+
+      described here:
+      https://docs.mongodb.com/manual/reference/command/isMaster/
+    }
+    function GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = '') : TgoMongoInstanceInfo;
+    function IsMaster : Boolean;
+
     { Drops the database with the specified name.
 
       Parameters:
@@ -356,6 +458,15 @@ type
       yet. The collection is only opened once you start reading, writing or
       querying it. }
     function GetCollection(const AName: String): IgoMongoCollection;
+
+    { Creates a collection.
+
+      All parameters are described here:
+      https://docs.mongodb.com/manual/reference/command/create/ }
+    function CreateCollection(const AName : String; const ACapped : Boolean; const AMaxSize : Int64;
+      const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
+      const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
+      const ACollation : TgoMongoCollation) : Boolean;
 
     { The client used for this database. }
     property Client: IgoMongoClient read _GetClient;
@@ -513,7 +624,7 @@ type
       const ASort: TgoMongoSort): IgoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection;
-      const ASort: TgoMongoSort): IgoMongoCursor; overload;
+      const ASort: TgoMongoSort; const ANumberToSkip : Integer = 0): IgoMongoCursor; overload;
 
     { Finds the first document matching the filter.
 
@@ -543,6 +654,50 @@ type
         The number of documents that match the filter. }
     function Count: Integer; overload;
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
+
+    { Creates an index in the current collection.
+
+      Parameters:
+        AName: Name of the index.
+        AKeyFields: List of fields to build the index.
+        AUnique: Defines a unique index.
+
+      Returns:
+        Created or not. }
+    function CreateIndex(const AName : String; const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
+
+    { Creates an text index in the current collection.
+
+      Parameters:
+        AName: Name of the index.
+        AFields: List of fields to build the index.
+        ALanguageOverwriteField: Defines a field that contains the language to
+          use for a specific document.
+        ADefaultLanguage: Defines the default language for internal indexing.
+
+        See https://docs.mongodb.com/manual/reference/text-search-languages/#text-search-languages
+          for language definitions.
+
+      Returns:
+        Created or not. }
+    function CreateTextIndex(const AName : String; const AFields : Array of String;
+      const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'en'): Boolean;
+
+    { Drops an index in the current collection.
+
+      Parameters:
+        AName: Name of the index.
+
+      Returns:
+        Dropped or not. }
+    function DropIndex(const AName : String): Boolean; overload;
+
+    { List all index names in the current collection.
+
+      Returns:
+        TArray<String> of index names. }
+    function ListIndexNames: TArray<String>; overload;
+    function ListIndexes: TArray<TgoBsonDocument>; overload;
 
     { The database that contains this collection. }
     property Database: IgoMongoDatabase read _GetDatabase;
@@ -614,6 +769,8 @@ type
     function ListDatabases: TArray<TgoBsonDocument>;
     procedure DropDatabase(const AName: String);
     function GetDatabase(const AName: String): IgoMongoDatabase;
+    function GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoMongoInstanceInfo;
+    function IsMaster : Boolean;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
   {$ENDREGION 'Internal Declarations'}
@@ -747,6 +904,11 @@ type
     function ListCollections: TArray<TgoBsonDocument>;
     procedure DropCollection(const AName: String);
     function GetCollection(const AName: String): IgoMongoCollection;
+
+    function CreateCollection(const AName : String; const ACapped : Boolean; const AMaxSize : Int64;
+      const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
+      const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
+      const ACollation : TgoMongoCollation) : Boolean;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
@@ -815,7 +977,7 @@ type
     function Update(const AFilter: TgoMongoFilter;
       const AUpdate: TgoMongoUpdate; const AUpsert, AOrdered,
       AMulti: Boolean): Integer;
-    function Find(const AFilter, AProjection: TBytes): IgoMongoCursor; overload;
+    function Find(const AFilter, AProjection: TBytes; const ANumberToSkip : Integer = 0): IgoMongoCursor; overload;
     function FindOne(const AFilter, AProjection: TBytes): TgoBsonDocument; overload;
   private
     class function AddModifier(const AFilter: TgoMongoFilter;
@@ -852,13 +1014,21 @@ type
       const ASort: TgoMongoSort): IgoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection;
-      const ASort: TgoMongoSort): IgoMongoCursor; overload;
+      const ASort: TgoMongoSort; const ANumberToSkip : Integer = 0): IgoMongoCursor; overload;
     function FindOne(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
 
     function Count: Integer; overload;
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
+
+    function CreateIndex(const AName : String; const AKeyFields : Array of String;
+      const AUnique : Boolean = false): Boolean;
+    function CreateTextIndex(const AName : String; const AFields : Array of String;
+      const ALanguageOverwriteField : String = ''; const ADefaultLanguage : String = 'en'): Boolean;
+    function DropIndex(const AName : String): Boolean;
+    function ListIndexNames: TArray<String>;
+    function ListIndexes: TArray<TgoBsonDocument>;
   {$ENDREGION 'Internal Declarations'}
   public
     constructor Create(const ADatabase: TgoMongoDatabase; const AName: String);
@@ -988,6 +1158,69 @@ begin
     Result[I] := Databases[I].AsBsonDocument;
 end;
 
+function TgoMongoClient.GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoMongoInstanceInfo;
+// https://docs.mongodb.com/manual/reference/command/isMaster/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  Doc: TgoBsonDocument;
+  InstArray: TgoBsonArray;
+  Databases: TgoBsonArray;
+  Value: TgoBsonValue;
+  I: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteInt32('isMaster', 1);
+  if (Length(ASaslSupportedMechs) > 0) then
+  begin
+    Writer.WriteString('saslSupportedMechs', ASaslSupportedMechs);
+    if (Length(AComment) > 0) then
+      Writer.WriteString('Comment', AComment);
+  end;
+  Writer.WriteEndDocument;
+  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+
+  if not(Reply.Documents = nil) then
+  begin
+    Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+
+    Result.Primary      := TgoMongoInstance.Create(Doc.Get('primary','').ToString);
+    Result.Me           := TgoMongoInstance.Create(Doc.Get('me','').ToString);
+    Result.SetName      := Doc.Get('setName','').ToString;
+    Result.SetVersion   := Doc.Get('setVersion',0).ToInteger;
+    Result.IsMaster     := Doc.Get('ismaster',false).ToBoolean;
+    Result.IsSecondary  := Doc.Get('secondary',false).ToBoolean;
+    Result.ArbiterOnly  := Doc.Get('arbiterOnly',false).ToBoolean;
+    Result.LocalTime    := Doc.Get('localTime',0).ToUniversalTime;
+    Result.ConnectionId := Doc.Get('connectionId',0).ToInteger;
+    Result.ReadOnly     := Doc.Get('readOnly',true).ToBoolean;
+
+    if Doc.Contains('hosts') then
+    begin
+      InstArray := Doc.Get('hosts','').AsBsonArray;
+      SetLength(Result.Hosts,InstArray.Count);
+      for I := 0 to InstArray.Count-1 do
+        Result.Hosts[i] := TgoMongoInstance.Create(InstArray.Items[i].ToString);
+    end else Result.Hosts := nil;
+
+    if Doc.Contains('arbiters') then
+    begin
+      InstArray := Doc.Get('arbiters','').AsBsonArray;
+      SetLength(Result.Arbiters,InstArray.Count);
+      for I := 0 to InstArray.Count-1 do
+        Result.Arbiters[i] := TgoMongoInstance.Create(InstArray.Items[i].ToString);
+    end else Result.Arbiters := nil;
+
+  end else raise Exception.Create('invalid response');
+end;
+
+function TgoMongoClient.IsMaster: Boolean;
+begin
+  Result := Self.GetInstanceInfo().IsMaster;
+end;
+
 { TgoMongoDatabase }
 
 constructor TgoMongoDatabase.Create(const AClient: TgoMongoClient;
@@ -1021,6 +1254,54 @@ function TgoMongoDatabase.GetCollection(
   const AName: String): IgoMongoCollection;
 begin
   Result := TgoMongoCollection.Create(Self, AName);
+end;
+
+function TgoMongoDatabase.CreateCollection(const AName: String;
+  const ACapped: Boolean; const AMaxSize, AMaxDocuments: Int64;
+  const AValidationLevel: TgoMongoValidationLevel;
+  const AValidationAction: TgoMongoValidationAction;
+  const AValidator: TgoBsonDocument; const ACollation: TgoMongoCollation): Boolean;
+// https://docs.mongodb.com/manual/reference/method/db.createCollection/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  i: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+
+  Writer.WriteStartDocument;
+  Writer.WriteString('create', AName);
+
+  Writer.WriteBoolean('capped', ACapped);
+  if ACapped = true then
+  begin
+    Writer.WriteInt64('size',AMaxSize);
+    Writer.WriteInt64('max',AMaxDocuments);
+  end;
+
+  if AValidator.IsNil = false then
+  begin
+    Writer.WriteName('validator');
+    Writer.WriteRawBsonDocument(AValidator.ToBson);
+    Writer.WriteString('validationLevel',AValidationLevel.ToString);
+    Writer.WriteString('validationAction',AValidationAction.ToString);
+  end;
+
+  Writer.WriteName('collation');
+  Writer.WriteStartDocument;
+  Writer.WriteString('locale',ACollation.Locale);
+  Writer.WriteBoolean('caseLevel',ACollation.CaseLevel);
+  Writer.WriteString('caseFirst',ACollation.CaseFirst.ToString);
+  Writer.WriteInt32('strength',ACollation.Strength);
+  Writer.WriteBoolean('numericOrdering',ACollation.NumericOrdering);
+  Writer.WriteString('alternate',ACollation.Alternate.ToString);
+  Writer.WriteString('maxVariable',ACollation.MaxVariable.ToString);
+  Writer.WriteBoolean('backwards',ACollation.Backwards);
+  Writer.WriteEndDocument;
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
 end;
 
 function TgoMongoDatabase.ListCollectionNames: TArray<String>;
@@ -1228,6 +1509,139 @@ begin
   Assert(FProtocol <> nil);
 end;
 
+function TgoMongoCollection.CreateIndex(const AName : String;
+  const AKeyFields : Array of String; const AUnique : Boolean = false): Boolean;
+// https://docs.mongodb.com/manual/reference/command/createIndexes/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  i: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('createIndexes', FName);
+
+  Writer.WriteStartArray('indexes');
+  Writer.WriteStartDocument;
+  Writer.WriteStartDocument('key');
+  for i:=0 to High(AKeyFields) do
+    Writer.WriteInt32(AKeyFields[i],1);
+  Writer.WriteEndDocument;
+  Writer.WriteString('name', AName);
+  Writer.WriteBoolean('unique', AUnique);
+  Writer.WriteEndDocument;
+  Writer.WriteEndArray;
+
+  AddWriteConcern(Writer);
+
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
+end;
+
+function TgoMongoCollection.CreateTextIndex(const AName : String;
+  const AFields : Array of String; const ALanguageOverwriteField : String = '';
+  const ADefaultLanguage : String = 'en'): Boolean;
+// https://docs.mongodb.com/manual/core/index-text/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  i: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('createIndexes', FName);
+
+  Writer.WriteStartArray('indexes');
+  Writer.WriteStartDocument;
+  Writer.WriteStartDocument('key');
+  for i:=0 to High(AFields) do
+    Writer.WriteString(AFields[i],'text');
+  Writer.WriteEndDocument;
+  Writer.WriteString('name', AName);
+
+  if ADefaultLanguage.IsEmpty = false
+    then Writer.WriteString('default_language', ADefaultLanguage);
+
+  if ALanguageOverwriteField.IsEmpty = false
+    then Writer.WriteString('language_override', ALanguageOverwriteField);
+
+  Writer.WriteEndDocument;
+  Writer.WriteEndArray;
+
+  AddWriteConcern(Writer);
+
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
+end;
+
+function TgoMongoCollection.DropIndex(const AName : String): Boolean;
+// https://docs.mongodb.com/manual/reference/command/dropIndexes/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('dropIndexes', FName);
+  Writer.WriteString('index', AName);
+
+  AddWriteConcern(Writer);
+
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
+end;
+
+function TgoMongoCollection.ListIndexNames: TArray<String>;
+// https://docs.mongodb.com/manual/reference/command/listIndexes/
+var
+  Docs: TArray<TgoBsonDocument>;
+  I: Integer;
+begin
+  Docs := ListIndexes;
+  SetLength(Result, Length(Docs));
+  for I := 0 to Length(Docs) - 1 do
+    Result[I] := Docs[I]['name'];
+end;
+
+function TgoMongoCollection.ListIndexes: TArray<TgoBsonDocument>;
+// https://docs.mongodb.com/manual/reference/command/listIndexes/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  Doc, Cursor: TgoBsonDocument;
+  Value: TgoBsonValue;
+  Docs: TgoBsonArray;
+  I: Integer;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteString('listIndexes', FName);
+  Writer.WriteEndDocument;
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+  if (Reply.Documents = nil) then
+    Exit(nil);
+
+  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+  if (not Doc.TryGetValue('cursor', Value)) then
+    Exit(nil);
+  Cursor := Value.AsBsonDocument;
+
+  if (not Cursor.TryGetValue('firstBatch', Value)) then
+    Exit(nil);
+
+  Docs := Value.AsBsonArray;
+  SetLength(Result, Docs.Count);
+  for I := 0 to Docs.Count - 1 do
+    Result[I] := Docs[I].AsBsonDocument;
+end;
+
 function TgoMongoCollection.Delete(const AFilter: TgoMongoFilter;
   const AOrdered: Boolean; const ALimit: Integer): Integer;
 // https://docs.mongodb.com/manual/reference/command/delete/
@@ -1296,18 +1710,18 @@ end;
 
 function TgoMongoCollection.Find(const AFilter: TgoMongoFilter;
   const AProjection: TgoMongoProjection;
-  const ASort: TgoMongoSort): IgoMongoCursor;
+  const ASort: TgoMongoSort; const ANumberToSkip : Integer = 0): IgoMongoCursor;
 begin
-  Result := Find(AddModifier(AFilter, ASort), AProjection.ToBson);
+  Result := Find(AddModifier(AFilter, ASort), AProjection.ToBson, ANumberToSkip);
 end;
 
 function TgoMongoCollection.Find(const AFilter,
-  AProjection: TBytes): IgoMongoCursor;
+  AProjection: TBytes; const ANumberToSkip : Integer = 0): IgoMongoCursor;
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
 var
   Reply: IgoMongoReply;
 begin
-  Reply := FProtocol.OpQuery(FFullName, [], 0, 0, AFilter, AProjection);
+  Reply := FProtocol.OpQuery(FFullName, [], ANumberToSkip, 0, AFilter, AProjection);
   HandleTimeout(Reply);
   Result := TgoMongoCursor.Create(FProtocol, FFullName, Reply.Documents, Reply.CursorId);
 end;
@@ -1478,6 +1892,85 @@ end;
 function TgoMongoCollection._GetName: String;
 begin
   Result := FName;
+end;
+
+{ TgoMongoValidationLevelHelper }
+
+function TgoMongoValidationLevelHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoValidationLevel.vlOff      : Result := 'off';
+    TgoMongoValidationLevel.vlStrict   : Result := 'strict';
+    TgoMongoValidationLevel.vlModerate : Result := 'moderate';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoValidationActionHelper }
+
+function TgoMongoValidationActionHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoValidationAction.vaError : Result := 'error';
+    TgoMongoValidationAction.vaWarn  : Result := 'warn';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoCollationCaseFirstHelper }
+
+function TgoMongoCollationCaseFirstHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoCollationCaseFirst.ccfUpper : Result := 'upper';
+    TgoMongoCollationCaseFirst.ccfLower : Result := 'lower';
+    TgoMongoCollationCaseFirst.ccfOff   : Result := 'off';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoCollationAlternateHelper }
+
+function TgoMongoCollationAlternateHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoCollationAlternate.caNonIgnorable : Result := 'non-ignorable';
+    TgoMongoCollationAlternate.caShifted      : Result := 'shifted';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoCollationMaxVariableHelper }
+
+function TgoMongoCollationMaxVariableHelper.ToString: String;
+begin
+  case Self of
+    TgoMongoCollationMaxVariable.cmvPunct : Result := 'punct';
+    TgoMongoCollationMaxVariable.cmvSpace : Result := 'space';
+    else raise Exception.Create('invalid type');
+  end;
+end;
+
+{ TgoMongoInstance }
+
+constructor TgoMongoInstance.Create(AHost: String; APort: Word);
+begin
+  Self.Host := AHost;
+  Self.Port := APort;
+end;
+
+constructor TgoMongoInstance.Create(AInstance: String);
+begin
+  try
+    if AInstance.Contains(':') = true then
+    begin
+      Self.Host := Copy(AInstance,1,Pos(':',AInstance)-1).Trim;
+      Self.Port := Copy(AInstance,Pos(':',AInstance)+1,AInstance.Length).Trim.ToInteger;
+    end;
+  except
+    Self.Host := '';
+    Self.Port := 0;
+  end;
 end;
 
 end.
