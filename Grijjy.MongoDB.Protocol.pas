@@ -521,9 +521,12 @@ begin
   try
     Connection := FConnection;
     FConnection := FClientSocketManager.Request(FHost, FPort);
-    FConnection.OnConnected := SocketConnected;
-    FConnection.OnDisconnected := SocketDisconnected;
-    FConnection.OnRecv := SocketRecv;
+    if Assigned(FConnection) then
+    begin
+      FConnection.OnConnected := SocketConnected;
+      FConnection.OnDisconnected := SocketDisconnected;
+      FConnection.OnRecv := SocketRecv;
+    end;
   finally
     FConnectionLock.Release;
   end;
@@ -531,6 +534,10 @@ begin
   { Release the last connection }
   if (Connection <> nil) then
     FClientSocketManager.Release(Connection);
+
+  { Shutting down }
+  if not Assigned(FConnection) then
+    Exit(False);
 
   Result := (ConnectionState = TgoConnectionState.Connected);
   if (not Result) then
