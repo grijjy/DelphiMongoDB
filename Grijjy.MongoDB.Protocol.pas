@@ -568,19 +568,15 @@ begin
     if ConnectionState <> TgoConnectionState.Connected then
       Exit(False);
 
-    { No authentication }
-    if FSettings.AuthMechanism = TgoMongoAuthMechanism.None then
-      Exit(True);
+    Result := True;
+  end;
 
+  { Always check this, because credentials may have changed }
+  if FSettings.AuthMechanism <> TgoMongoAuthMechanism.None then
+  begin
     { SCRAM Authenticate }
     if not Authenticate then
-    begin
       raise EgoMongoDBConnectionError.Create(Format(RS_MONGODB_AUTHENTICATION_ERROR, [FAuthErrorCode, FAuthErrorMessage]));
-      FConnection.Disconnect;
-      Exit(False);
-    end;
-
-    Result := True;
   end;
 end;
 
