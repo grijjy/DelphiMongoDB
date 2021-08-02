@@ -468,6 +468,12 @@ type
       const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
       const ACollation : TgoMongoCollation) : Boolean;
 
+    { Rename a collection.
+
+      All parameters are described here:
+      https://docs.mongodb.com/manual/reference/command/renameCollection/ }
+    function RenameCollection(const AFromNamespace, AToNamespace : String; const ADropTarget : Boolean = false) : Boolean;
+
     { The client used for this database. }
     property Client: IgoMongoClient read _GetClient;
 
@@ -909,6 +915,8 @@ type
       const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
       const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
       const ACollation : TgoMongoCollation) : Boolean;
+
+    function RenameCollection(const AFromNamespace, AToNamespace : String; const ADropTarget : Boolean = false) : Boolean;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
@@ -1350,6 +1358,26 @@ begin
   for I := 0 to Docs.Count - 1 do
     Result[I] := Docs[I].AsBsonDocument;
 end;
+
+function TgoMongoDatabase.RenameCollection(const AFromNamespace,
+  AToNamespace: String; const ADropTarget: Boolean): Boolean;
+// https://docs.mongodb.com/manual/reference/command/renameCollection/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+begin
+  Writer := TgoBsonWriter.Create;
+
+  Writer.WriteStartDocument;
+  Writer.WriteString('renameCollection', AFromNamespace);
+  Writer.WriteString('to', AToNamespace);
+  Writer.WriteBoolean('dropTarget', ADropTarget);
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
+end;
+
 
 function TgoMongoDatabase._GetClient: IgoMongoClient;
 begin
