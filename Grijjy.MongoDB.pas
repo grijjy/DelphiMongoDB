@@ -29,10 +29,8 @@ type
     function ToString : String;
   end;
 
-type
   { MongoDB collation
     https://docs.mongodb.com/manual/reference/collation/ }
-
   TgoMongoCollationCaseFirst = (ccfUpper, ccfLower, ccfOff);
   TgoMongoCollationCaseFirstHelper = record helper for TgoMongoCollationCaseFirst
   public
@@ -63,6 +61,27 @@ type
     Backwards       : Boolean;
   end;
 
+  { MongoDb dbStats
+    https://docs.mongodb.com/manual/reference/command/dbStats/ }
+  TgoMongoStatistics = record
+  public
+    Database    : String;
+    Collections : Integer;
+    Views       : Integer;
+    Objects     : Int64;
+    AvgObjSize  : Double;
+    DataSize    : Double;
+    StorageSize : Double;
+    NumExtents  : Integer;
+    Indexes     : Integer;
+    IndexSize   : Double;
+    ScaleFactor : Double;
+    FsUsedSize  : Double;
+    FsTotalSize : Double;
+  end;
+
+  { MongoDb instances
+    https://docs.mongodb.com/manual/reference/command/isMaster/ }
   TgoMongoInstance = record
   public
     Host : String;
@@ -467,6 +486,18 @@ type
       const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
       const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
       const ACollation : TgoMongoCollation) : Boolean;
+
+    { Rename a collection.
+
+      All parameters are described here:
+      https://docs.mongodb.com/manual/reference/command/renameCollection/ }
+    function RenameCollection(const AFromNamespace, AToNamespace : String; const ADropTarget : Boolean = false) : Boolean;
+
+    { Get database statistics.
+
+      All parameters are described here:
+       https://docs.mongodb.com/manual/reference/command/dbStats/ }
+    function GetDbStats(const AScale : Integer) : TgoMongoStatistics;
 
     { The client used for this database. }
     property Client: IgoMongoClient read _GetClient;
@@ -909,6 +940,10 @@ type
       const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
       const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
       const ACollation : TgoMongoCollation) : Boolean;
+
+    function RenameCollection(const AFromNamespace, AToNamespace : String; const ADropTarget : Boolean = false) : Boolean;
+
+    function GetDbStats(const AScale : Integer) : TgoMongoStatistics;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
@@ -1257,6 +1292,41 @@ begin
   Result := TgoMongoCollection.Create(Self, AName);
 end;
 
+function TgoMongoDatabase.GetDbStats(const AScale: Integer): TgoMongoStatistics;
+// https://docs.mongodb.com/manual/reference/command/dbStats/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  Doc: TgoBsonDocument;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  Writer.WriteInt32('dbStats', 1);
+  Writer.WriteInt32('scale', AScale);
+  Writer.WriteEndDocument;
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+
+  if (Reply.Documents = nil) then
+    raise EgoMongoDBError.Create(RS_MONGODB_GENERIC_ERROR);
+
+  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+
+  Result.Database    := Doc.Get('db','').ToString;
+  Result.Collections := Doc.Get('collections',0).ToInteger;
+  Result.Views       := Doc.Get('views',0).ToInteger;
+  Result.Objects     := Doc.Get('objects',0).ToInt64;
+  Result.AvgObjSize  := Doc.Get('avgObjSize',0).ToDouble;
+  Result.DataSize    := Doc.Get('dataSize',0).ToDouble;
+  Result.StorageSize := Doc.Get('storageSize',0).ToDouble;
+  Result.NumExtents  := Doc.Get('numExtents',0).ToInteger;
+  Result.Indexes     := Doc.Get('indexes',0).ToInteger;
+  Result.IndexSize   := Doc.Get('indexSize',0).ToDouble;
+  Result.ScaleFactor := Doc.Get('scaleFactor',0).ToDouble;
+  Result.FsUsedSize  := Doc.Get('fsUsedSize',0).ToDouble;
+  Result.FsTotalSize := Doc.Get('fsTotalSize',0).ToDouble;
+end;
+
 function TgoMongoDatabase.CreateCollection(const AName: String;
   const ACapped: Boolean; const AMaxSize, AMaxDocuments: Int64;
   const AValidationLevel: TgoMongoValidationLevel;
@@ -1351,6 +1421,26 @@ begin
   for I := 0 to Docs.Count - 1 do
     Result[I] := Docs[I].AsBsonDocument;
 end;
+
+function TgoMongoDatabase.RenameCollection(const AFromNamespace,
+  AToNamespace: String; const ADropTarget: Boolean): Boolean;
+// https://docs.mongodb.com/manual/reference/command/renameCollection/
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+begin
+  Writer := TgoBsonWriter.Create;
+
+  Writer.WriteStartDocument;
+  Writer.WriteString('renameCollection', AFromNamespace);
+  Writer.WriteString('to', AToNamespace);
+  Writer.WriteBoolean('dropTarget', ADropTarget);
+  Writer.WriteEndDocument;
+
+  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Result := (HandleCommandReply(Reply) = 0);
+end;
+
 
 function TgoMongoDatabase._GetClient: IgoMongoClient;
 begin
