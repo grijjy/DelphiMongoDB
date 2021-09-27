@@ -1200,8 +1200,6 @@ var
   Reply: IgoMongoReply;
   Doc: TgoBsonDocument;
   InstArray: TgoBsonArray;
-  Databases: TgoBsonArray;
-  Value: TgoBsonValue;
   I: Integer;
 begin
   Writer := TgoBsonWriter.Create;
@@ -1335,7 +1333,6 @@ function TgoMongoDatabase.CreateCollection(const AName: String;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
-  i: Integer;
 begin
   Writer := TgoBsonWriter.Create;
 
