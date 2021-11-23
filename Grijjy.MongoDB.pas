@@ -1204,7 +1204,7 @@ var
 begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
-  Writer.WriteInt32('isMaster', 1);
+  Writer.WriteInt32('hello', 1);
   if (Length(ASaslSupportedMechs) > 0) then
   begin
     Writer.WriteString('saslSupportedMechs', ASaslSupportedMechs);
@@ -1212,7 +1212,7 @@ begin
       Writer.WriteString('Comment', AComment);
   end;
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil, true);
   HandleCommandReply(Reply);
 
   if not(Reply.Documents = nil) then

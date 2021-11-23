@@ -185,7 +185,7 @@ type
     FAuthErrorCode: Integer;
   private
     procedure Send(const AData: TBytes);
-    function WaitForReply(const ARequestId: Integer): IgoMongoReply;
+    function WaitForReply(const ARequestId: Integer; forceWaitTimeout : Boolean = false): IgoMongoReply;
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
     function LastPartialReply(const ARequestID: Integer; out ALastRecv: TDateTime): Boolean;
     function OpReplyValid(out AIndex: Integer): Boolean;
@@ -254,7 +254,8 @@ type
     function OpQuery(const AFullCollectionName: UTF8String;
       const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
       ANumberToReturn: Integer; const AQuery: TBytes;
-      const AReturnFieldsSelector: TBytes = nil): IgoMongoReply;
+      const AReturnFieldsSelector: TBytes = nil;
+      const forceWaitTimeout : Boolean = false): IgoMongoReply;
 
     { Implements the OP_GET_MORE opcode, used to get an additional page of
       documents from the database.
@@ -700,7 +701,8 @@ end;
 function TgoMongoProtocol.OpQuery(const AFullCollectionName: UTF8String;
   const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
   ANumberToReturn: Integer; const AQuery,
-  AReturnFieldsSelector: TBytes): IgoMongoReply;
+  AReturnFieldsSelector: TBytes;
+  const forceWaitTimeout : Boolean): IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-query }
 var
   Header: TMsgHeader;
@@ -735,7 +737,7 @@ begin
   finally
     Data.Free;
   end;
-  Result := WaitForReply(Header.RequestID);
+  Result := WaitForReply(Header.RequestID, forceWaitTimeout);
 end;
 
 function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader): Boolean;
@@ -885,16 +887,24 @@ begin
 end;
 
 function TgoMongoProtocol.WaitForReply(
-  const ARequestId: Integer): IgoMongoReply;
+  const ARequestId: Integer; forceWaitTimeout : Boolean = false): IgoMongoReply;
 var
   LastRecv: TDateTime;
+  InitRecv: TDateTime;
 begin
   Result := nil;
+  InitRecv := Now;
   while (ConnectionState = TgoConnectionState.Connected) and
     (not TryGetReply(ARequestID, Result)) do
   begin
     if LastPartialReply(ARequestID, LastRecv) and
       (MillisecondsBetween(Now, LastRecv) > FSettings.ReplyTimeout)
+    then
+      Break;
+    // in case we didn't receive any response, stop if timout
+    // is reached and forceWaitTimeout=true is passed
+    if ((Int(LastRecv) = 0) and (forceWaitTimeout = true) and
+        (MillisecondsBetween(Now, InitRecv) > FSettings.ReplyTimeout))
     then
       Break;
     Sleep(5);
