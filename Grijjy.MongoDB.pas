@@ -1205,7 +1205,7 @@ var
 begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
-  Writer.WriteInt32('hello', 1);
+  Writer.WriteInt32('isMaster', 1);
   if (Length(ASaslSupportedMechs) > 0) then
   begin
     Writer.WriteString('saslSupportedMechs', ASaslSupportedMechs);
