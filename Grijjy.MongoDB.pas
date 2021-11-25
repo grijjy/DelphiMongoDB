@@ -1201,8 +1201,6 @@ var
   Reply: IgoMongoReply;
   Doc: TgoBsonDocument;
   InstArray: TgoBsonArray;
-  Databases: TgoBsonArray;
-  Value: TgoBsonValue;
   I: Integer;
 begin
   Writer := TgoBsonWriter.Create;
@@ -1215,7 +1213,7 @@ begin
       Writer.WriteString('Comment', AComment);
   end;
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil, true);
   HandleCommandReply(Reply);
 
   if not(Reply.Documents = nil) then
@@ -1336,7 +1334,6 @@ function TgoMongoDatabase.CreateCollection(const AName: String;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
-  i: Integer;
 begin
   Writer := TgoBsonWriter.Create;
 
