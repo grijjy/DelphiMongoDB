@@ -164,6 +164,7 @@ type
   private const
     OP_QUERY = 2004;
     OP_GET_MORE = 2005;
+    OP_KILL_CURSORS=2007;
     RECV_BUFFER_SIZE = 32768;
     EMPTY_DOCUMENT: array [0..4] of Byte = (5, 0, 0, 0, 0);
   private class var
@@ -273,8 +274,27 @@ type
 
       Returns:
         The reply to the query, or nil if the request timed out. }
+
     function OpGetMore(const AFullCollectionName: UTF8String;
       const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
+
+    { Implements the OP_KILL_CURSORS opcode, used to free open cursors on the server.
+     (wire protocol 3.0)
+
+      Use case:
+       Called by the destructor of tgoMongoCursor.tEnumerator.
+       If the enumeration loop was exited prematurely without enumerating all elements,
+       that would sometimes result in a resource leak on the server (orphaned cursor).
+
+      Parameters:
+        ACursorIds
+          An array with the cursor ID's to release. The values should not be 0.
+
+      See also:
+         https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors}
+
+    Procedure OpKillCursors(const ACursorIds: Tarray<Int64>);
+
   public
     { Authenticate error message if failed }
     property AuthErrorMessage: String read FAuthErrorMessage;
@@ -696,6 +716,36 @@ begin
     Data.Free;
   end;
   Result := WaitForReply(Header.RequestID);
+end;
+
+Procedure TgoMongoProtocol.OpKillCursors(const ACursorIds: TArray<Int64>);
+{https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors}
+var
+  Header: TMsgHeader;
+  Data: TgoByteBuffer;
+  I: Int32;
+begin
+  if Length(ACursorIds) <> 0 then
+  begin
+    Header.MessageLength := SizeOf(TMsgHeader) + 2 * SizeOf(Int32) + Length(ACursorIds) * SizeOf(Int64);
+    Header.RequestID := AtomicIncrement(FNextRequestId);
+    Header.ResponseTo := 0;
+    Header.OpCode := OP_KILL_CURSORS;
+    Data := TgoByteBuffer.Create(Header.MessageLength);
+    try
+      Data.AppendBuffer(Header, SizeOf(TMsgHeader));
+      I := 0;
+      Data.AppendBuffer(I, SizeOf(Int32)); // Reserved
+      I := Length(ACursorIds);
+      Data.AppendBuffer(I, SizeOf(Int32)); // Number of cursors to delete
+      for I := 0 to high(ACursorIds) do
+        Data.AppendBuffer(ACursorIds[I], SizeOf(Int64));
+      Send(Data.ToBytes);
+    finally
+      Data.Free;
+    end;
+    // The OP_KILL_CURSORS from wire protocol 3.0 does NOT return a result.
+  end;
 end;
 
 function TgoMongoProtocol.OpQuery(const AFullCollectionName: UTF8String;

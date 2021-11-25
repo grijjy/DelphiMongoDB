@@ -971,6 +971,7 @@ type
       function DoGetCurrent: TgoBsonDocument; override;
       function DoMoveNext: Boolean; override;
     public
+      destructor Destroy;Override;
       constructor Create(const AProtocol: TgoMongoProtocol;
         const AFullCollectionName: UTF8String; const APage: TArray<TBytes>;
         const ACursorId: Int64);
@@ -1503,6 +1504,20 @@ begin
   FCursorId := ACursorId;
   FIndex := -1;
 end;
+
+destructor TgoMongoCursor.TEnumerator.Destroy;
+begin
+  if fCursorID <>0 then //we exited the for...in loop before the cursor was exhausted
+	begin
+	  try
+	      FProtocol.OpKillCursors([FCursorId]);
+	  except
+        //always ignore exceptions in a destructor!
+	  end;
+	end;
+	inherited;
+end;
+
 
 function TgoMongoCursor.TEnumerator.DoGetCurrent: TgoBsonDocument;
 begin
