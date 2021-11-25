@@ -186,7 +186,7 @@ type
     FAuthErrorCode: Integer;
   private
     procedure Send(const AData: TBytes);
-    function WaitForReply(const ARequestId: Integer; forceWaitTimeout : Boolean = false): IgoMongoReply;
+    function WaitForReply(const ARequestId: Integer; AForceWaitTimeout : Boolean = false): IgoMongoReply;
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
     function LastPartialReply(const ARequestID: Integer; out ALastRecv: TDateTime): Boolean;
     function OpReplyValid(out AIndex: Integer): Boolean;
@@ -256,7 +256,7 @@ type
       const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
       ANumberToReturn: Integer; const AQuery: TBytes;
       const AReturnFieldsSelector: TBytes = nil;
-      const forceWaitTimeout : Boolean = false): IgoMongoReply;
+      const AForceWaitTimeout : Boolean = false): IgoMongoReply;
 
     { Implements the OP_GET_MORE opcode, used to get an additional page of
       documents from the database.
@@ -752,7 +752,7 @@ function TgoMongoProtocol.OpQuery(const AFullCollectionName: UTF8String;
   const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
   ANumberToReturn: Integer; const AQuery,
   AReturnFieldsSelector: TBytes;
-  const forceWaitTimeout : Boolean): IgoMongoReply;
+  const AForceWaitTimeout : Boolean): IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-query }
 var
   Header: TMsgHeader;
@@ -787,7 +787,7 @@ begin
   finally
     Data.Free;
   end;
-  Result := WaitForReply(Header.RequestID, forceWaitTimeout);
+  Result := WaitForReply(Header.RequestID, AForceWaitTimeout);
 end;
 
 function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader): Boolean;
@@ -937,7 +937,7 @@ begin
 end;
 
 function TgoMongoProtocol.WaitForReply(
-  const ARequestId: Integer; forceWaitTimeout : Boolean = false): IgoMongoReply;
+  const ARequestId: Integer; AForceWaitTimeout : Boolean = false): IgoMongoReply;
 var
   LastRecv: TDateTime;
   InitRecv: TDateTime;
@@ -952,8 +952,8 @@ begin
     then
       Break;
     // in case we didn't receive any response, stop if timout
-    // is reached and forceWaitTimeout=true is passed
-    if ((Int(LastRecv) = 0) and (forceWaitTimeout = true) and
+    // is reached and AForceWaitTimeout=true is passed
+    if ((Int(LastRecv) = 0) and (AForceWaitTimeout = true) and
         (MillisecondsBetween(Now, InitRecv) > FSettings.ReplyTimeout))
     then
       Break;
