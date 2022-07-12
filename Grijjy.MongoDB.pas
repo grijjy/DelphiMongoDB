@@ -662,6 +662,10 @@ type
       Parameters:
         AFilter: filter containing query operators to search for the document
           that matches the filter.
+        ASort: (optional) use this to find the maximum or minimum value of a field. 
+          An empty filter (tgomongofilter.Empty) with ASort=tgomongosort.Descending('price') 
+          will return the document having the highest 'price'. 
+          For best performance, use indexes in the collection.
         AProjection: (optional) projection that specifies the fields to return
           in the document that matches the query filter. If not specified, then
           all fields are returned.
@@ -673,6 +677,8 @@ type
     function FindOne(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
+    function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
+    function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort): TgoBsonDocument; overload;
 
     { Counts the number of documents matching the filter.
 
@@ -1054,6 +1060,8 @@ type
     function FindOne(const AFilter: TgoMongoFilter;
       const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
+    function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
+    function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort): TgoBsonDocument; overload;
 
     function Count: Integer; overload;
     function Count(const AFilter: TgoMongoFilter): Integer; overload;
@@ -1855,6 +1863,17 @@ begin
     Result.SetNil
   else
     Result := TgoBsonDocument.Load(Reply.Documents[0]);
+end;
+
+function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection;
+  const ASort: TgoMongoSort): TgoBsonDocument;
+begin
+  Result := FindOne(AddModifier(AFilter, ASort),AProjection.ToBson);
+end;
+
+function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument;
+begin
+  Result := FindOne(AddModifier(AFilter, ASort),NIL);
 end;
 
 function TgoMongoCollection.InsertMany(
