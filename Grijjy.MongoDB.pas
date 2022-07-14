@@ -386,6 +386,7 @@ type
   { Forward declarations }
   IgoMongoDatabase = interface;
   IgoMongoCollection = interface;
+  tWriteCmd = Reference to procedure(Writer: IgoBsonWriter);
 
   { The client interface to MongoDB.
     This is the entry point for the MongoDB API.
@@ -413,6 +414,21 @@ type
     }
     function GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = '') : TgoMongoInstanceInfo;
     function IsMaster : Boolean;
+
+    { Issue an admin command that is supposed to return ONE document }
+    function AdminCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+    { Issue a logRotate command.
+      https://www.mongodb.com/docs/manual/reference/command/logRotate/ }
+    function LogRotate: Boolean;
+    { Query build info of the current Mongod
+      https://www.mongodb.com/docs/manual/reference/command/buildInfo/ }
+    function BuildInfo: TgoBsonDocument;
+    { Query system/platform info of the current Mongod server
+      https://www.mongodb.com/docs/manual/reference/command/hostInfo/ }
+    function HostInfo: TgoBsonDocument;
+    { Query build-level feature settings
+      https://www.mongodb.com/docs/manual/reference/command/features/ }
+    function Features: TgoBsonDocument;
 
     { Drops the database with the specified name.
 
@@ -808,6 +824,11 @@ type
     function GetDatabase(const AName: String): IgoMongoDatabase;
     function GetInstanceInfo(const ASaslSupportedMechs: String = ''; const AComment: String = ''): TgoMongoInstanceInfo;
     function IsMaster : Boolean;
+    function AdminCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+    function LogRotate: Boolean;
+    function BuildInfo: TgoBsonDocument;
+    function HostInfo: TgoBsonDocument;
+    function Features: TgoBsonDocument;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
   {$ENDREGION 'Internal Declarations'}
@@ -1263,6 +1284,67 @@ end;
 function TgoMongoClient.IsMaster: Boolean;
 begin
   Result := Self.GetInstanceInfo().IsMaster;
+end;
+
+{ This method performs an administrative command and returns ONE document.
+  It uses dependency injection by calling an anonymous method that "injects"
+  commands into the BSON document }
+function TgoMongoClient.AdminCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  CommandToIssue(Writer); // let the anonymous method write the commands
+  Writer.WriteEndDocument;
+  Reply := Protocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+  if not(Reply.Documents = nil) then
+    Result := TgoBsonDocument.Load(Reply.Documents[0])
+  else
+    Result.SetNil;
+end;
+
+function TgoMongoClient.BuildInfo: TgoBsonDocument;
+begin
+  Result := AdminCommandDoc(
+    procedure(Writer: IgoBsonWriter)
+    begin
+      Writer.WriteInt32('buildInfo', 1);
+    end);
+end;
+
+function TgoMongoClient.Features: TgoBsonDocument;
+begin
+  Result := AdminCommandDoc(
+    procedure(Writer: IgoBsonWriter)
+    begin
+      Writer.WriteInt32('features', 1);
+    end);
+end;
+
+function TgoMongoClient.HostInfo: TgoBsonDocument;
+begin
+  Result := AdminCommandDoc(
+    procedure(Writer: IgoBsonWriter)
+    begin
+      Writer.WriteInt32('hostInfo', 1);
+    end);
+end;
+
+function TgoMongoClient.LogRotate: Boolean;
+var
+  Answer: TgoBsonDocument;
+begin
+  Result := false;
+  Answer := AdminCommandDoc(
+    procedure(Writer: IgoBsonWriter)
+    begin
+      Writer.WriteInt32('logRotate', 1);
+    end);
+  if not Answer.IsNil then
+    Result := Answer['ok']
 end;
 
 { TgoMongoDatabase }
