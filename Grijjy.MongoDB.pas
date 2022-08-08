@@ -515,6 +515,10 @@ type
        https://docs.mongodb.com/manual/reference/command/dbStats/ }
     function GetDbStats(const AScale : Integer) : TgoMongoStatistics;
 
+    {Issue a command against the database that returns one document.
+    Similar to AdminCommandDoc.}
+    function DBCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+
     { The client used for this database. }
     property Client: IgoMongoClient read _GetClient;
 
@@ -752,6 +756,10 @@ type
     function ListIndexNames: TArray<String>; overload;
     function ListIndexes: TArray<TgoBsonDocument>; overload;
 
+    {Return statistics about the collection, see
+     https://www.mongodb.com/docs/manual/reference/command/collStats}
+    function Stats: TgoBsonDocument;
+
     { The database that contains this collection. }
     property Database: IgoMongoDatabase read _GetDatabase;
 
@@ -967,10 +975,9 @@ type
       const AMaxDocuments : Int64; const AValidationLevel : TgoMongoValidationLevel;
       const AValidationAction : TgoMongoValidationAction; const AValidator : TgoBsonDocument;
       const ACollation : TgoMongoCollation) : Boolean;
-
     function RenameCollection(const AFromNamespace, AToNamespace : String; const ADropTarget : Boolean = false) : Boolean;
-
     function GetDbStats(const AScale : Integer) : TgoMongoStatistics;
+    function DBCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
@@ -1094,6 +1101,7 @@ type
     function DropIndex(const AName : String): Boolean;
     function ListIndexNames: TArray<String>;
     function ListIndexes: TArray<TgoBsonDocument>;
+    function Stats: TgoBsonDocument;
   {$ENDREGION 'Internal Declarations'}
   public
     constructor Create(const ADatabase: TgoMongoDatabase; const AName: String);
@@ -1361,6 +1369,24 @@ begin
   FProtocol := AClient.Protocol;
   Assert(FProtocol <> nil);
 end;
+
+function TgoMongoDatabase.DBCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  CommandToIssue(Writer); // let the anonymous method write the commands
+  Writer.WriteEndDocument;
+  Reply := Protocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+  if not(Reply.Documents = nil) then
+    Result := TgoBsonDocument.Load(Reply.Documents[0])
+  else
+    Result.SetNil;
+end;
+
 
 procedure TgoMongoDatabase.DropCollection(const AName: String);
 // https://docs.mongodb.com/manual/reference/command/drop/#dbcmd.drop
@@ -1802,6 +1828,17 @@ begin
   SetLength(Result, Length(Docs));
   for I := 0 to Length(Docs) - 1 do
     Result[I] := Docs[I]['name'];
+end;
+
+function TgoMongoCollection.Stats: TgoBsonDocument;
+//https://www.mongodb.com/docs/manual/reference/command/collStats/
+
+begin
+   result:=FDatabase.DBCommandDoc(
+   procedure(Writer: IgoBsonWriter)
+   begin
+     writer.WriteString('collStats',FName);
+   end);
 end;
 
 function TgoMongoCollection.ListIndexes: TArray<TgoBsonDocument>;
