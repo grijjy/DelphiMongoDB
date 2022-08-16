@@ -8,7 +8,6 @@ interface
 uses
   System.SysUtils,
   System.Generics.Collections,
-
   Grijjy.Bson,
   Grijjy.Bson.IO,
   Grijjy.MongoDB.Protocol,
@@ -429,6 +428,9 @@ type
     { Query build-level feature settings
       https://www.mongodb.com/docs/manual/reference/command/features/ }
     function Features: TgoBsonDocument;
+    {Query to find out MaxWireVersion}
+    function Hello: TgoBsonDocument;
+
 
     { Drops the database with the specified name.
 
@@ -837,6 +839,7 @@ type
     function BuildInfo: TgoBsonDocument;
     function HostInfo: TgoBsonDocument;
     function Features: TgoBsonDocument;
+    function Hello: TgoBsonDocument;
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
   {$ENDREGION 'Internal Declarations'}
@@ -1332,6 +1335,15 @@ begin
     end);
 end;
 
+function TgoMongoClient.Hello: TgoBsonDocument;
+begin
+  Result := AdminCommandDoc(
+    procedure(Writer: IgoBsonWriter)
+    begin
+      Writer.WriteInt32('hello', 1);
+    end);
+end;
+
 function TgoMongoClient.HostInfo: TgoBsonDocument;
 begin
   Result := AdminCommandDoc(
@@ -1359,6 +1371,7 @@ end;
 
 constructor TgoMongoDatabase.Create(const AClient: TgoMongoClient;
   const AName: String);
+  var doc:tgobsondocument;
 begin
   Assert(AClient <> nil);
   Assert(AName <> '');

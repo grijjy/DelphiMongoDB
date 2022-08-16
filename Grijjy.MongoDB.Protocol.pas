@@ -1,6 +1,6 @@
 unit Grijjy.MongoDB.Protocol;
-{< Implements the MongoDB Wire Protocol.
-   This unit is only used internally. }
+{ < Implements the MongoDB Wire Protocol.
+  This unit is only used internally. }
 
 {$INCLUDE 'Grijjy.inc'}
 
@@ -10,13 +10,13 @@ uses
   System.SyncObjs,
   System.SysUtils,
   System.Generics.Collections,
-  {$IF Defined(MSWINDOWS)}
+{$IF Defined(MSWINDOWS)}
   Grijjy.SocketPool.Win,
-  {$ELSEIF Defined(LINUX)}
+{$ELSEIF Defined(LINUX)}
   Grijjy.SocketPool.Linux,
-  {$ELSE}
-    {$MESSAGE Error 'The MongoDB driver is only supported on Windows and Linux'}
-  {$ENDIF}
+{$ELSE}
+{$MESSAGE Error 'The MongoDB driver is only supported on Windows and Linux'}
+{$ENDIF}
   Grijjy.Bson;
 
 type
@@ -86,17 +86,19 @@ type
   TgoMongoResponseFlags = set of TgoMongoResponseFlag;
 
 type
-  { A reply to a query (see TgoMongoProtocol.OpQuery) }
+  { A reply to a query (see TgoMongoProtocol.OpQuery)..
+    The OP_REPLY message is sent by the database in response
+    to an OP_QUERY or OP_GET_MORE message. }
+
   IgoMongoReply = interface
-  ['{25CEF8E1-B023-4232-BE9A-1FBE9E51CE57}']
-    {$REGION 'Internal Declarations'}
+    ['{25CEF8E1-B023-4232-BE9A-1FBE9E51CE57}']
+{$REGION 'Internal Declarations'}
     function _GetResponseFlags: TgoMongoResponseFlags;
     function _GetCursorId: Int64;
     function _GetStartingFrom: Integer;
     function _GetResponseTo: Integer;
     function _GetDocuments: TArray<TBytes>;
-    {$ENDREGION 'Internal Declarations'}
-
+{$ENDREGION 'Internal Declarations'}
     { Various reponse flags }
     property ReponseFlags: TgoMongoResponseFlags read _GetResponseFlags;
 
@@ -105,7 +107,7 @@ type
       This cursorID must be used in any GetMore messages used to get more data. }
     property CursorId: Int64 read _GetCursorId;
 
-    { Starting position in the cursor.}
+    { Starting position in the cursor. }
     property StartingFrom: Integer read _GetStartingFrom;
 
     { The identifier of the message that this reply is response to. }
@@ -143,34 +145,34 @@ type
     PrivateKey: TBytes;
 
     { Password for private key, optional }
-    PrivateKeyPassword: String;
+    PrivateKeyPassword: string;
 
     { Authentication mechanism }
     AuthMechanism: TgoMongoAuthMechanism;
 
     { Authentication database }
-    AuthDatabase: String;
+    AuthDatabase: string;
 
     { Authentication username }
-    Username: String;
+    Username: string;
 
     { Authentication password }
-    Password: String;
+    Password: string;
   end;
 
 type
   TgoMongoProtocol = class
-  {$REGION 'Internal Declarations'}
+{$REGION 'Internal Declarations'}
   private const
     OP_QUERY = 2004;
     OP_GET_MORE = 2005;
-    OP_KILL_CURSORS=2007;
+    OP_KILL_CURSORS = 2007;
     RECV_BUFFER_SIZE = 32768;
-    EMPTY_DOCUMENT: array [0..4] of Byte = (5, 0, 0, 0, 0);
-  private class var
-    FClientSocketManager: TgoClientSocketManager;
+    EMPTY_DOCUMENT: array [0 .. 4] of Byte = (5, 0, 0, 0, 0);
   private
-    FHost: String;
+    class var FClientSocketManager: TgoClientSocketManager;
+  private
+    FHost: string;
     FPort: Integer;
     FSettings: TgoMongoProtocolSettings;
     FNextRequestId: Integer;
@@ -182,19 +184,21 @@ type
     FRecvBuffer: TBytes;
     FRecvSize: Integer;
     FRecvBufferLock: TCriticalSection;
-    FAuthErrorMessage: String;
+    FAuthErrorMessage: string;
     FAuthErrorCode: Integer;
+    FMinWireVersion: Integer;
+    FMaxWireVersion: Integer;
   private
     procedure Send(const AData: TBytes);
     function WaitForReply(const ARequestId: Integer): IgoMongoReply;
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
-    function LastPartialReply(const ARequestID: Integer; out ALastRecv: TDateTime): Boolean;
+    function LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
     function OpReplyValid(out AIndex: Integer): Boolean;
     function OpReplyMsgHeader(out AMsgHeader): Boolean;
   private
     { Authentication }
-    function saslStart(const APayload: String): IgoMongoReply;
-    function saslContinue(const AConversationId: Integer; const APayload: String): IgoMongoReply;
+    function saslStart(const APayload: string): IgoMongoReply;
+    function saslContinue(const AConversationId: Integer; const APayload: string): IgoMongoReply;
     function Authenticate: Boolean;
 
     { Connection }
@@ -206,100 +210,98 @@ type
     procedure SocketConnected;
     procedure SocketDisconnected;
     procedure SocketRecv(const ABuffer: Pointer; const ASize: Integer);
+    procedure DetermineWireProtocol;
   public
     class constructor Create;
     class destructor Destroy;
-  {$ENDREGION 'Internal Declarations'}
+{$ENDREGION 'Internal Declarations'}
   public
     { Creates the protocol.
 
       Parameters:
-        AHost: host address of the MongoDB server to connect to.
-        APort: connection port.
-        ASettings: custom protocol settings. }
-    constructor Create(const AHost: String; const APort: Integer;
-      const ASettings: TgoMongoProtocolSettings);
+      AHost: host address of the MongoDB server to connect to.
+      APort: connection port.
+      ASettings: custom protocol settings. }
+    constructor Create(const AHost: string; const APort: Integer; const ASettings: TgoMongoProtocolSettings);
     destructor Destroy; override;
 
     { Implements the OP_QUERY opcode, used to query the database for documents
       in a collection.
 
       Parameters:
-        AFullCollectionName: the fully qualified name of the collection in the
-          database to query (in <DatabaseName>.<CollectionName> form).
-        AFlags: various query flags.
-        ANumberToSkip: the number of documents to omit - starting from the first
-          document in the resulting dataset - when returning the result of the
-          query.
-        ANumberToReturn: limits the number of documents in the first reply to
-          the query. However, the database will still establish a cursor and
-          return the cursorID to the client if there are more results than
-          ANumberToReturn.
-          If ANumberToReturn is 0, the db will use the default return size.
-          If the number is negative, then the database will return that number
-          and close the cursor. No further results for that query can be
-          fetched.
-          If ANumberToReturn is 1 the server will treat it as -1 (closing the
-          cursor automatically).
-        AQuery: raw BSON data with the document that represents the query.
-          The query will contain one or more elements, all of which must match
-          for a document to be included in the result set. Possible elements
-          include $query, $orderby, $hint, $explain, and $snapshot.
-        AReturnFieldsSelector: (optional) raw BSON data with a document that
-          limits the fields in the returned documents. The AReturnFieldsSelector
-          contains one or more elements, each of which is the name of a field
-          that should be returned, and and the integer value 1.
+      AFullCollectionName: the fully qualified name of the collection in the
+      database to query (in <DatabaseName>.<CollectionName> form).
+      AFlags: various query flags.
+      ANumberToSkip: the number of documents to omit - starting from the first
+      document in the resulting dataset - when returning the result of the
+      query.
+      ANumberToReturn: limits the number of documents in the first reply to
+      the query. However, the database will still establish a cursor and
+      return the cursorID to the client if there are more results than
+      ANumberToReturn.
+      If ANumberToReturn is 0, the db will use the default return size.
+      If the number is negative, then the database will return that number
+      and close the cursor. No further results for that query can be
+      fetched.
+      If ANumberToReturn is 1 the server will treat it as -1 (closing the
+      cursor automatically).
+      AQuery: raw BSON data with the document that represents the query.
+      The query will contain one or more elements, all of which must match
+      for a document to be included in the result set. Possible elements
+      include $query, $orderby, $hint, $explain, and $snapshot.
+      AReturnFieldsSelector: (optional) raw BSON data with a document that
+      limits the fields in the returned documents. The AReturnFieldsSelector
+      contains one or more elements, each of which is the name of a field
+      that should be returned, and and the integer value 1.
 
       Returns:
-        The reply to the query, or nil if the request timed out. }
-    function OpQuery(const AFullCollectionName: String;
-      const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
-      ANumberToReturn: Integer; const AQuery: TBytes;
-      const AReturnFieldsSelector: TBytes = nil): IgoMongoReply;
+      The reply to the query, or nil if the request timed out. }
+    function OpQuery(const AFullCollectionName: string; const AFlags: TgoMongoQueryFlags; const ANumberToSkip, ANumberToReturn: Integer;
+      const AQuery: TBytes; const AReturnFieldsSelector: TBytes = nil): IgoMongoReply;
 
     { Implements the OP_GET_MORE opcode, used to get an additional page of
       documents from the database.
 
       Parameters:
-        AFullCollectionName: the fully qualified name of the collection in the
-          database to query (in <DatabaseName>.<CollectionName> form).
-        ANumberToReturn: limits the number of documents in the first reply to
-          the query. However, the database will still establish a cursor and
-          return the cursorID to the client if there are more results than
-          ANumberToReturn.
-          If ANumberToReturn is 0, the db will use the default return size.
-        ACursorId: cursor identifier as returned in the reply from a previous
-          call to OpQuery or OpGetMore.
+      AFullCollectionName: the fully qualified name of the collection in the
+      database to query (in <DatabaseName>.<CollectionName> form).
+      ANumberToReturn: limits the number of documents in the first reply to
+      the query. However, the database will still establish a cursor and
+      return the cursorID to the client if there are more results than
+      ANumberToReturn.
+      If ANumberToReturn is 0, the db will use the default return size.
+      ACursorId: cursor identifier as returned in the reply from a previous
+      call to OpQuery or OpGetMore.
 
       Returns:
-        The reply to the query, or nil if the request timed out. }
+      The reply to the query, or nil if the request timed out. }
 
-    function OpGetMore(const AFullCollectionName: String;
-      const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
+    function OpGetMore(const AFullCollectionName: string; const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
 
     { Implements the OP_KILL_CURSORS opcode, used to free open cursors on the server.
-     (wire protocol 3.0)
+      (wire protocol 3.0)
 
       Use case:
-       Called by the destructor of tgoMongoCursor.tEnumerator.
-       If the enumeration loop was exited prematurely without enumerating all elements,
-       that would sometimes result in a resource leak on the server (orphaned cursor).
+      Called by the destructor of tgoMongoCursor.tEnumerator.
+      If the enumeration loop was exited prematurely without enumerating all elements,
+      that would sometimes result in a resource leak on the server (orphaned cursor).
 
       Parameters:
-        ACursorIds
-          An array with the cursor ID's to release. The values should not be 0.
+      ACursorIds
+      An array with the cursor ID's to release. The values should not be 0.
 
       See also:
-         https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors}
+      https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors }
 
-    Procedure OpKillCursors(const ACursorIds: Tarray<Int64>);
-
+    procedure OpKillCursors(const ACursorIds: TArray<Int64>);
   public
     { Authenticate error message if failed }
-    property AuthErrorMessage: String read FAuthErrorMessage;
+    property AuthErrorMessage: string read FAuthErrorMessage;
 
     { Authenticate error code if failed }
     property AuthErrorCode: Integer read FAuthErrorCode;
+    property MinWireVersion:Integer read fMinWireVersion;
+    property MaxWireVersion:Integer read fMaxWireVersion;
   end;
 
 resourcestring
@@ -320,6 +322,7 @@ type
     ResponseTo: Int32;
     OpCode: Int32;
   end;
+
   PMsgHeader = ^TMsgHeader;
 
 type
@@ -331,6 +334,7 @@ type
     NumberReturned: Int32;
     { Documents: Documents }
   end;
+
   POpReplyHeader = ^TOpReplyHeader;
 
 type
@@ -350,12 +354,11 @@ type
     constructor Create(const ABuffer: TBytes; const ASize: Integer);
   end;
 
-{ TgoMongoProtocol }
+  { TgoMongoProtocol }
 
 class constructor TgoMongoProtocol.Create;
 begin
-  FClientSocketManager := TgoClientSocketManager.Create(
-    TgoSocketOptimization.Scale, TgoSocketPoolBehavior.PoolAndReuse);
+  FClientSocketManager := TgoClientSocketManager.Create(TgoSocketOptimization.Scale, TgoSocketPoolBehavior.PoolAndReuse);
 end;
 
 class destructor TgoMongoProtocol.Destroy;
@@ -363,7 +366,7 @@ begin
   FreeAndNil(FClientSocketManager);
 end;
 
-function TgoMongoProtocol.saslStart(const APayload: String): IgoMongoReply;
+function TgoMongoProtocol.saslStart(const APayload: string): IgoMongoReply;
 var
   Writer: IgoBsonWriter;
 begin
@@ -384,7 +387,7 @@ begin
   Result := OpQuery(FSettings.AuthDatabase + '.$cmd', [], 0, -1, Writer.ToBson, nil);
 end;
 
-function TgoMongoProtocol.saslContinue(const AConversationId: Integer; const APayload: String): IgoMongoReply;
+function TgoMongoProtocol.saslContinue(const AConversationId: Integer; const APayload: string): IgoMongoReply;
 var
   Writer: IgoBsonWriter;
 begin
@@ -403,7 +406,7 @@ end;
 function TgoMongoProtocol.Authenticate: Boolean;
 var
   Scram: TgoScram;
-  ServerFirstMsg, ServerSecondMsg: String;
+  ServerFirstMsg, ServerSecondMsg: string;
   ConversationDoc: TgoBsonDocument;
   PayloadBinary: TgoBsonBinaryData;
   ConversationId: Integer;
@@ -418,8 +421,8 @@ begin
   case FSettings.AuthMechanism of
     TgoMongoAuthMechanism.SCRAM_SHA_1:
       Scram := TgoScram.Create(TgoScramMechanism.SCRAM_SHA_1, FSettings.Username, FSettings.Password);
-    else
-      Scram := TgoScram.Create(TgoScramMechanism.SCRAM_SHA_256, FSettings.Username, FSettings.Password);
+  else
+    Scram := TgoScram.Create(TgoScramMechanism.SCRAM_SHA_256, FSettings.Username, FSettings.Password);
   end;
 
   try
@@ -439,23 +442,23 @@ begin
     Ok := ConversationDoc['ok'];
     if not Ok then
     begin
-//      {
-//        "ok" : 0.0,
-//        "errmsg" : "Authentication failed.",
-//        "code" : 18,
-//        "codeName" : "AuthenticationFailed"
-//      }
+      // {
+      // "ok" : 0.0,
+      // "errmsg" : "Authentication failed.",
+      // "code" : 18,
+      // "codeName" : "AuthenticationFailed"
+      // }
       FAuthErrorMessage := ConversationDoc['errmsg'];
       FAuthErrorCode := ConversationDoc['code'];
       Exit(False);
     end;
 
-//    {
-//      "conversationId" : 1,
-//      "done" : false,
-//      "payload" : { "$binary" : "a=b,c=d", "$type" : "00" },
-//      "ok" : 1.0
-//    }
+    // {
+    // "conversationId" : 1,
+    // "done" : false,
+    // "payload" : { "$binary" : "a=b,c=d", "$type" : "00" },
+    // "ok" : 1.0
+    // }
     { The first message from the server to the client }
     PayloadBinary := ConversationDoc['payload'].AsBsonBinaryData;
     ServerFirstMsg := TEncoding.Utf8.GetString(PayloadBinary.AsBytes);
@@ -530,9 +533,7 @@ var
     Start: TDateTime;
   begin
     Start := Now;
-    while (MillisecondsBetween(Now, Start) < FSettings.ConnectionTimeout) and
-      (FConnection.State <> TgoConnectionState.Connected)
-    do
+    while (MillisecondsBetween(Now, Start) < FSettings.ConnectionTimeout) and (FConnection.State <> TgoConnectionState.Connected) do
       Sleep(5);
   end;
 
@@ -613,8 +614,7 @@ begin
   end;
 end;
 
-constructor TgoMongoProtocol.Create(const AHost: String; const APort: Integer;
-  const ASettings: TgoMongoProtocolSettings);
+constructor TgoMongoProtocol.Create(const AHost: string; const APort: Integer; const ASettings: TgoMongoProtocolSettings);
 begin
   Assert(AHost <> '');
   Assert(APort <> 0);
@@ -628,6 +628,7 @@ begin
   FCompletedReplies := TDictionary<Integer, IgoMongoReply>.Create;
   FPartialReplies := TDictionary<Integer, TDateTime>.Create;
   SetLength(FRecvBuffer, RECV_BUFFER_SIZE);
+  DetermineWireProtocol;
 end;
 
 destructor TgoMongoProtocol.Destroy;
@@ -670,6 +671,36 @@ begin
   inherited;
 end;
 
+procedure TgoMongoProtocol.DetermineWireProtocol;
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
+  Doc: TgoBsonDocument;
+  Databases: TgoBsonArray;
+  Value: TgoBsonValue;
+  I: Integer;
+begin
+  if FMaxWireVersion = 0 then
+  begin
+    FMaxWireVersion := 1;
+    try
+      Writer := TgoBsonWriter.Create;
+      Writer.WriteStartDocument;
+      Writer.WriteInt32('hello', 1);
+      Writer.WriteEndDocument;
+      Reply := OpQuery('admin.$cmd', [], 0, -1, Writer.ToBson, nil);
+      if length(Reply.Documents) > 0 then
+      begin
+        Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+        FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
+        FMinWireVersion := Doc['minWireVersion'].AsInteger;
+      end;
+    except
+      // ignore
+    end;
+  end;
+end;
+
 function TgoMongoProtocol.IsConnected: Boolean;
 begin
   Result := (ConnectionState = TgoConnectionState.Connected);
@@ -677,29 +708,27 @@ begin
     Result := Connect;
 end;
 
-function TgoMongoProtocol.LastPartialReply(const ARequestID: Integer;
-  out ALastRecv: TDateTime): Boolean;
+function TgoMongoProtocol.LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
 begin
   FRepliesLock.Acquire;
   try
-    Result := FPartialReplies.TryGetValue(ARequestID, ALastRecv);
+    Result := FPartialReplies.TryGetValue(ARequestId, ALastRecv);
   finally
     FRepliesLock.Release;
   end;
 end;
 
-function TgoMongoProtocol.OpGetMore(const AFullCollectionName: String;
-  const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
+function TgoMongoProtocol.OpGetMore(const AFullCollectionName: string; const ANumberToReturn: Integer; const ACursorId: Int64)
+  : IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-get-more }
 var
   Header: TMsgHeader;
   Data: TgoByteBuffer;
   I: Integer;
-  FullCollectionName:UTF8String;
+  FullCollectionName: UTF8String;
 begin
-  FullCollectionName:=UTF8String(AFullCollectionName);
-  Header.MessageLength := SizeOf(TMsgHeader) + 16
-    + Length(FullCollectionName) + 1;
+  FullCollectionName := UTF8String(AFullCollectionName);
+  Header.MessageLength := SizeOf(TMsgHeader) + 16 + length(FullCollectionName) + 1;
   Header.RequestID := AtomicIncrement(FNextRequestId);
   Header.ResponseTo := 0;
   Header.OpCode := OP_GET_MORE;
@@ -709,7 +738,7 @@ begin
     Data.AppendBuffer(Header, SizeOf(TMsgHeader));
     I := 0;
     Data.AppendBuffer(I, SizeOf(Int32)); // Reserved
-    Data.AppendBuffer(FullCollectionName[Low(UTF8String)], Length(FullCollectionName) + 1);
+    Data.AppendBuffer(FullCollectionName[low(UTF8String)], length(FullCollectionName) + 1);
     Data.AppendBuffer(ANumberToReturn, SizeOf(Int32));
     Data.AppendBuffer(ACursorId, SizeOf(Int64));
     Send(Data.ToBytes);
@@ -719,16 +748,16 @@ begin
   Result := WaitForReply(Header.RequestID);
 end;
 
-Procedure TgoMongoProtocol.OpKillCursors(const ACursorIds: TArray<Int64>);
-{https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors}
+procedure TgoMongoProtocol.OpKillCursors(const ACursorIds: TArray<Int64>);
+{ https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors }
 var
   Header: TMsgHeader;
   Data: TgoByteBuffer;
   I: Int32;
 begin
-  if Length(ACursorIds) <> 0 then
+  if length(ACursorIds) <> 0 then
   begin
-    Header.MessageLength := SizeOf(TMsgHeader) + 2 * SizeOf(Int32) + Length(ACursorIds) * SizeOf(Int64);
+    Header.MessageLength := SizeOf(TMsgHeader) + 2 * SizeOf(Int32) + length(ACursorIds) * SizeOf(Int64);
     Header.RequestID := AtomicIncrement(FNextRequestId);
     Header.ResponseTo := 0;
     Header.OpCode := OP_KILL_CURSORS;
@@ -737,7 +766,7 @@ begin
       Data.AppendBuffer(Header, SizeOf(TMsgHeader));
       I := 0;
       Data.AppendBuffer(I, SizeOf(Int32)); // Reserved
-      I := Length(ACursorIds);
+      I := length(ACursorIds);
       Data.AppendBuffer(I, SizeOf(Int32)); // Number of cursors to delete
       for I := 0 to high(ACursorIds) do
         Data.AppendBuffer(ACursorIds[I], SizeOf(Int64));
@@ -749,24 +778,20 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.OpQuery(const AFullCollectionName: String;
-  const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
-  ANumberToReturn: Integer; const AQuery,
-  AReturnFieldsSelector: TBytes): IgoMongoReply;
+function TgoMongoProtocol.OpQuery(const AFullCollectionName: string; const AFlags: TgoMongoQueryFlags;
+  const ANumberToSkip, ANumberToReturn: Integer; const AQuery, AReturnFieldsSelector: TBytes): IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-query }
 var
   Header: TMsgHeader;
   Data: TgoByteBuffer;
   I: Int32;
-  FullCollectionName:UTF8String;
+  FullCollectionName: UTF8String;
 begin
-  FullCollectionName:=UTF8String(AFullCollectionName);
+  FullCollectionName := UTF8String(AFullCollectionName);
 
-  Header.MessageLength := SizeOf(TMsgHeader) + 12
-    + Length(FullCollectionName) + 1
-    + Length(AQuery) + Length(AReturnFieldsSelector);
+  Header.MessageLength := SizeOf(TMsgHeader) + 12 + length(FullCollectionName) + 1 + length(AQuery) + length(AReturnFieldsSelector);
   if (AQuery = nil) then
-    Inc(Header.MessageLength, Length(EMPTY_DOCUMENT));
+    Inc(Header.MessageLength, length(EMPTY_DOCUMENT));
   Header.RequestID := AtomicIncrement(FNextRequestId);
   Header.ResponseTo := 0;
   Header.OpCode := OP_QUERY;
@@ -776,7 +801,7 @@ begin
     Data.AppendBuffer(Header, SizeOf(TMsgHeader));
     I := Byte(AFlags) or Byte(FSettings.QueryFlags);
     Data.AppendBuffer(I, SizeOf(Int32));
-    Data.AppendBuffer(FullCollectionName[Low(UTF8String)], Length(FullCollectionName) + 1);
+    Data.AppendBuffer(FullCollectionName[low(UTF8String)], length(FullCollectionName) + 1);
     Data.AppendBuffer(ANumberToSkip, SizeOf(Int32));
     Data.AppendBuffer(ANumberToReturn, SizeOf(Int32));
     if (AQuery <> nil) then
@@ -867,8 +892,7 @@ begin
   { Not interested (yet) }
 end;
 
-procedure TgoMongoProtocol.SocketRecv(const ABuffer: Pointer;
-  const ASize: Integer);
+procedure TgoMongoProtocol.SocketRecv(const ABuffer: Pointer; const ASize: Integer);
 var
   MongoReply: IgoMongoReply;
   Index: Integer;
@@ -877,7 +901,7 @@ begin
   FRecvBufferLock.Enter;
   try
     { Expand the buffer if we are at capacity }
-    if (FRecvSize + ASize >= Length(FRecvBuffer)) then
+    if (FRecvSize + ASize >= length(FRecvBuffer)) then
       SetLength(FRecvBuffer, (FRecvSize + ASize) * 2);
 
     { Append the new buffer }
@@ -887,7 +911,7 @@ begin
     { Is there one or more valid replies pending? }
     while True do
     begin
-      if OpReplyValid(Index) then
+      if OpReplyValid(index) then
       begin
         MongoReply := TgoMongoReply.Create(FRecvBuffer, FRecvSize);
 
@@ -903,10 +927,10 @@ begin
         end;
 
         { Shift the receive buffer, if needed }
-        if (Index = FRecvSize) then
+        if (index = FRecvSize) then
           FRecvSize := 0
         else
-          Move(FRecvBuffer[Index], FRecvBuffer[0], FRecvSize - Index);
+          Move(FRecvBuffer[index], FRecvBuffer[0], FRecvSize - index);
       end
       else
       begin
@@ -928,8 +952,7 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.TryGetReply(const ARequestId: Integer;
-  out AReply: IgoMongoReply): Boolean;
+function TgoMongoProtocol.TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean;
 begin
   FRepliesLock.Acquire;
   try
@@ -939,18 +962,14 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.WaitForReply(
-  const ARequestId: Integer): IgoMongoReply;
+function TgoMongoProtocol.WaitForReply(const ARequestId: Integer): IgoMongoReply;
 var
   LastRecv: TDateTime;
 begin
   Result := nil;
-  while (ConnectionState = TgoConnectionState.Connected) and
-    (not TryGetReply(ARequestID, Result)) do
+  while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, Result)) do
   begin
-    if LastPartialReply(ARequestID, LastRecv) and
-      (MillisecondsBetween(Now, LastRecv) > FSettings.ReplyTimeout)
-    then
+    if LastPartialReply(ARequestId, LastRecv) and (MillisecondsBetween(Now, LastRecv) > FSettings.ReplyTimeout) then
       Break;
     Sleep(5);
   end;
@@ -981,20 +1000,20 @@ begin
     FHeader := POpReplyHeader(@ABuffer[0])^;
     if (FHeader.NumberReturned > 0) then
     begin
-      Index := SizeOf(TOpReplyHeader);
+      index := SizeOf(TOpReplyHeader);
       Count := 0;
       SetLength(FDocuments, FHeader.NumberReturned);
 
       for I := 0 to FHeader.NumberReturned - 1 do
       begin
-        Move(ABuffer[Index], Size, SizeOf(Int32));
-        if (ASize < (Index + Size)) then
+        Move(ABuffer[index], Size, SizeOf(Int32));
+        if (ASize < (index + Size)) then
           Break;
 
         SetLength(Document, Size);
-        Move(ABuffer[Index], Document[0], Size);
+        Move(ABuffer[index], Document[0], Size);
         FDocuments[Count] := Document;
-        Inc(Index, Size);
+        Inc(index, Size);
         Inc(Count);
       end;
 
