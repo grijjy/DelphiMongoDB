@@ -960,7 +960,7 @@ type
     FClient: IgoMongoClient;
     FProtocol: TgoMongoProtocol; // Reference
     FName: String;
-    FFullCommandCollectionName: UTF8String;
+    FFullCommandCollectionName: String;
   protected
     { IgoMongoDatabase }
     function _GetClient: IgoMongoClient;
@@ -981,7 +981,7 @@ type
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
-    property FullCommandCollectionName: UTF8String read FFullCommandCollectionName;
+    property FullCommandCollectionName: String read FFullCommandCollectionName;
   {$ENDREGION 'Internal Declarations'}
   public
     constructor Create(const AClient: TgoMongoClient; const AName: String);
@@ -995,7 +995,7 @@ type
     TEnumerator = class(TEnumerator<TgoBsonDocument>)
     private
       FProtocol: TgoMongoProtocol; // Reference
-      FFullCollectionName: UTF8String;
+      FFullCollectionName: String;
       FPage: TArray<TBytes>;
       FCursorId: Int64;
       FIndex: Integer;
@@ -1007,12 +1007,12 @@ type
     public
       destructor Destroy;Override;
       constructor Create(const AProtocol: TgoMongoProtocol;
-        const AFullCollectionName: UTF8String; const APage: TArray<TBytes>;
+        const AFullCollectionName: String; const APage: TArray<TBytes>;
         const ACursorId: Int64);
     end;
   private
     FProtocol: TgoMongoProtocol; // Reference
-    FFullCollectionName: UTF8String;
+    FFullCollectionName: String;
     FInitialPage: TArray<TBytes>;
     FInitialCursorId: Int64;
   public
@@ -1021,7 +1021,7 @@ type
     function ToArray: TArray<TgoBsonDocument>;
   public
     constructor Create(const AProtocol: TgoMongoProtocol;
-      const AFullCollectionName: UTF8String; const AInitialPage: TArray<TBytes>;
+      const AFullCollectionName: String; const AInitialPage: TArray<TBytes>;
       const AInitialCursorId: Int64);
   {$ENDREGION 'Internal Declarations'}
   end;
@@ -1036,8 +1036,8 @@ type
     FDatabase: IgoMongoDatabase;
     FProtocol: TgoMongoProtocol; // Reference
     FName: String;
-    FFullName: UTF8String;
-    FFullCommandCollectionName: UTF8String;
+    FFullName: String;
+    FFullCommandCollectionName: String;
   private
     procedure AddWriteConcern(const AWriter: IgoBsonWriter);
     function InsertMany(const ADocuments: PgoBsonDocument;
@@ -1181,7 +1181,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('dropDatabase', 1);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(UTF8String(AName + '.' + COLLECTION_COMMAND),
+  Reply := FProtocol.OpQuery(AName + '.' + COLLECTION_COMMAND,
     [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 end;
@@ -1365,7 +1365,7 @@ begin
   inherited Create;
   FClient := AClient;
   FName := AName;
-  FFullCommandCollectionName := UTF8String(AName + '.' + COLLECTION_COMMAND);
+  FFullCommandCollectionName := AName + '.' + COLLECTION_COMMAND;
   FProtocol := AClient.Protocol;
   Assert(FProtocol <> nil);
 end;
@@ -1571,7 +1571,7 @@ end;
 { TgoMongoCursor }
 
 constructor TgoMongoCursor.Create(const AProtocol: TgoMongoProtocol;
-  const AFullCollectionName: UTF8String; const AInitialPage: TArray<TBytes>;
+  const AFullCollectionName: String; const AInitialPage: TArray<TBytes>;
   const AInitialCursorId: Int64);
 begin
   inherited Create;
@@ -1613,7 +1613,7 @@ end;
 { TgoMongoCursor.TEnumerator }
 
 constructor TgoMongoCursor.TEnumerator.Create(const AProtocol: TgoMongoProtocol;
-  const AFullCollectionName: UTF8String; const APage: TArray<TBytes>;
+  const AFullCollectionName: String; const APage: TArray<TBytes>;
   const ACursorId: Int64);
 begin
   inherited Create;
@@ -1724,7 +1724,7 @@ begin
   inherited Create;
   FDatabase := ADatabase;
   FName := AName;
-  FFullName := UTF8String(ADatabase.Name + '.' + AName);
+  FFullName := ADatabase.Name + '.' + AName;
   FFullCommandCollectionName := ADatabase.FullCommandCollectionName;
   FProtocol := ADatabase.Protocol;
   Assert(FProtocol <> nil);

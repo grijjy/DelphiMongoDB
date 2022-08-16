@@ -252,7 +252,7 @@ type
 
       Returns:
         The reply to the query, or nil if the request timed out. }
-    function OpQuery(const AFullCollectionName: UTF8String;
+    function OpQuery(const AFullCollectionName: String;
       const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
       ANumberToReturn: Integer; const AQuery: TBytes;
       const AReturnFieldsSelector: TBytes = nil): IgoMongoReply;
@@ -274,7 +274,7 @@ type
       Returns:
         The reply to the query, or nil if the request timed out. }
 
-    function OpGetMore(const AFullCollectionName: UTF8String;
+    function OpGetMore(const AFullCollectionName: String;
       const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
 
     { Implements the OP_KILL_CURSORS opcode, used to free open cursors on the server.
@@ -381,7 +381,7 @@ begin
   Writer.WriteInt32('autoAuthorize', 1);
   Writer.WriteEndDocument;
 
-  Result := OpQuery(Utf8String(FSettings.AuthDatabase + '.$cmd'), [], 0, -1, Writer.ToBson, nil);
+  Result := OpQuery(FSettings.AuthDatabase + '.$cmd', [], 0, -1, Writer.ToBson, nil);
 end;
 
 function TgoMongoProtocol.saslContinue(const AConversationId: Integer; const APayload: String): IgoMongoReply;
@@ -397,7 +397,7 @@ begin
   Writer.WriteBinaryData(TgoBsonBinaryData.Create(TEncoding.Utf8.GetBytes(APayload)));
   Writer.WriteEndDocument;
 
-  Result := OpQuery(Utf8String(FSettings.AuthDatabase + '.$cmd'), [], 0, -1, Writer.ToBson, nil);
+  Result := OpQuery(FSettings.AuthDatabase + '.$cmd', [], 0, -1, Writer.ToBson, nil);
 end;
 
 function TgoMongoProtocol.Authenticate: Boolean;
@@ -688,16 +688,18 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.OpGetMore(const AFullCollectionName: UTF8String;
+function TgoMongoProtocol.OpGetMore(const AFullCollectionName: String;
   const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-get-more }
 var
   Header: TMsgHeader;
   Data: TgoByteBuffer;
   I: Integer;
+  FullCollectionName:UTF8String;
 begin
+  FullCollectionName:=UTF8String(AFullCollectionName);
   Header.MessageLength := SizeOf(TMsgHeader) + 16
-    + Length(AFullCollectionName) + 1;
+    + Length(FullCollectionName) + 1;
   Header.RequestID := AtomicIncrement(FNextRequestId);
   Header.ResponseTo := 0;
   Header.OpCode := OP_GET_MORE;
@@ -707,7 +709,7 @@ begin
     Data.AppendBuffer(Header, SizeOf(TMsgHeader));
     I := 0;
     Data.AppendBuffer(I, SizeOf(Int32)); // Reserved
-    Data.AppendBuffer(AFullCollectionName[Low(UTF8String)], Length(AFullCollectionName) + 1);
+    Data.AppendBuffer(FullCollectionName[Low(UTF8String)], Length(FullCollectionName) + 1);
     Data.AppendBuffer(ANumberToReturn, SizeOf(Int32));
     Data.AppendBuffer(ACursorId, SizeOf(Int64));
     Send(Data.ToBytes);
@@ -747,7 +749,7 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.OpQuery(const AFullCollectionName: UTF8String;
+function TgoMongoProtocol.OpQuery(const AFullCollectionName: String;
   const AFlags: TgoMongoQueryFlags; const ANumberToSkip,
   ANumberToReturn: Integer; const AQuery,
   AReturnFieldsSelector: TBytes): IgoMongoReply;
@@ -756,9 +758,12 @@ var
   Header: TMsgHeader;
   Data: TgoByteBuffer;
   I: Int32;
+  FullCollectionName:UTF8String;
 begin
+  FullCollectionName:=UTF8String(AFullCollectionName);
+
   Header.MessageLength := SizeOf(TMsgHeader) + 12
-    + Length(AFullCollectionName) + 1
+    + Length(FullCollectionName) + 1
     + Length(AQuery) + Length(AReturnFieldsSelector);
   if (AQuery = nil) then
     Inc(Header.MessageLength, Length(EMPTY_DOCUMENT));
@@ -771,7 +776,7 @@ begin
     Data.AppendBuffer(Header, SizeOf(TMsgHeader));
     I := Byte(AFlags) or Byte(FSettings.QueryFlags);
     Data.AppendBuffer(I, SizeOf(Int32));
-    Data.AppendBuffer(AFullCollectionName[Low(UTF8String)], Length(AFullCollectionName) + 1);
+    Data.AppendBuffer(FullCollectionName[Low(UTF8String)], Length(FullCollectionName) + 1);
     Data.AppendBuffer(ANumberToSkip, SizeOf(Int32));
     Data.AppendBuffer(ANumberToReturn, SizeOf(Int32));
     if (AQuery <> nil) then
