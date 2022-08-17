@@ -874,22 +874,17 @@ uses
 {$POINTERMATH ON}
 
 const
-  { Virtual collection that is used for query commands }
-  COLLECTION_COMMAND = '$cmd';
-
-  { System collections }
-  COLLECTION_ADMIN = 'admin';
-  COLLECTION_ADMIN_COMMAND = COLLECTION_ADMIN + '.' + COLLECTION_COMMAND;
-
   { Maximum number of documents that can be written in bulk at once }
   MAX_BULK_SIZE      = 1000;
 
+{If no reply was received within timeout seconds, throw an exception}
 procedure HandleTimeout(const AReply: IgoMongoReply); inline;
 begin
   if (AReply = nil) then
     raise EgoMongoDBConnectionError.Create(RS_MONGODB_CONNECTION_ERROR);
 end;
 
+{If timeout, or error message, throw exception}
 function HandleCommandReply(const AReply: IgoMongoReply;
   const AErrorToIgnore: TgoMongoErrorCode = TgoMongoErrorCode.OK): Integer;
 var
@@ -963,7 +958,6 @@ type
     FClient: IgoMongoClient;
     FProtocol: TgoMongoProtocol; // Reference
     FName: String;
-    FFullCommandCollectionName: String;
   protected
     { IgoMongoDatabase }
     function _GetClient: IgoMongoClient;
@@ -984,7 +978,6 @@ type
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property Name: String read FName;
-    property FullCommandCollectionName: String read FFullCommandCollectionName;
   {$ENDREGION 'Internal Declarations'}
   public
     constructor Create(const AClient: TgoMongoClient; const AName: String);
@@ -998,7 +991,8 @@ type
     TEnumerator = class(TEnumerator<TgoBsonDocument>)
     private
       FProtocol: TgoMongoProtocol; // Reference
-      FFullCollectionName: String;
+      FDatabaseName:String;
+      FCollectionName: String;
       FPage: TArray<TBytes>;
       FCursorId: Int64;
       FIndex: Integer;
@@ -1010,12 +1004,13 @@ type
     public
       destructor Destroy;Override;
       constructor Create(const AProtocol: TgoMongoProtocol;
-        const AFullCollectionName: String; const APage: TArray<TBytes>;
+        const ADatabaseName, ACollectionName: String; const APage: TArray<TBytes>;
         const ACursorId: Int64);
     end;
   private
     FProtocol: TgoMongoProtocol; // Reference
-    FFullCollectionName: String;
+    FDatabaseName:String;
+    FCollectionName: String;
     FInitialPage: TArray<TBytes>;
     FInitialCursorId: Int64;
   public
@@ -1024,7 +1019,7 @@ type
     function ToArray: TArray<TgoBsonDocument>;
   public
     constructor Create(const AProtocol: TgoMongoProtocol;
-      const AFullCollectionName: String; const AInitialPage: TArray<TBytes>;
+      const ADatabaseName,ACollectionName: String; const AInitialPage: TArray<TBytes>;
       const AInitialCursorId: Int64);
   {$ENDREGION 'Internal Declarations'}
   end;
@@ -1039,8 +1034,7 @@ type
     FDatabase: IgoMongoDatabase;
     FProtocol: TgoMongoProtocol; // Reference
     FName: String;
-    FFullName: String;
-    FFullCommandCollectionName: String;
+   // FFullName: String;
   private
     procedure AddWriteConcern(const AWriter: IgoBsonWriter);
     function InsertMany(const ADocuments: PgoBsonDocument;
@@ -1184,7 +1178,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('dropDatabase', 1);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(AName + '.' + COLLECTION_COMMAND,
+  Reply := FProtocol.OpQuery(AName , COLLECTION_COMMAND,
     [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 end;
@@ -1219,7 +1213,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('listDatabases', 1);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   if (Reply.Documents = nil) then
     Exit(nil);
@@ -1255,7 +1249,7 @@ begin
       Writer.WriteString('Comment', AComment);
   end;
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 
   if not(Reply.Documents = nil) then
@@ -1309,7 +1303,7 @@ begin
   Writer.WriteStartDocument;
   CommandToIssue(Writer); // let the anonymous method write the commands
   Writer.WriteEndDocument;
-  Reply := Protocol.OpQuery(COLLECTION_ADMIN_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  Reply := Protocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   if not(Reply.Documents = nil) then
     Result := TgoBsonDocument.Load(Reply.Documents[0])
@@ -1378,7 +1372,6 @@ begin
   inherited Create;
   FClient := AClient;
   FName := AName;
-  FFullCommandCollectionName := AName + '.' + COLLECTION_COMMAND;
   FProtocol := AClient.Protocol;
   Assert(FProtocol <> nil);
 end;
@@ -1392,7 +1385,7 @@ begin
   Writer.WriteStartDocument;
   CommandToIssue(Writer); // let the anonymous method write the commands
   Writer.WriteEndDocument;
-  Reply := Protocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := Protocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   if not(Reply.Documents = nil) then
     Result := TgoBsonDocument.Load(Reply.Documents[0])
@@ -1411,7 +1404,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteString('drop', AName);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply, TgoMongoErrorCode.NamespaceNotFound);
 end;
 
@@ -1433,7 +1426,7 @@ begin
   Writer.WriteInt32('dbStats', 1);
   Writer.WriteInt32('scale', AScale);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 
   if (Reply.Documents = nil) then
@@ -1500,7 +1493,7 @@ begin
   Writer.WriteEndDocument;
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1529,7 +1522,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('listCollections', 1);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(FName, COLLECTION_COMMAND,[], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   if (Reply.Documents = nil) then
     Exit(nil);
@@ -1566,7 +1559,7 @@ begin
   Writer.WriteBoolean('dropTarget', ADropTarget);
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1584,19 +1577,20 @@ end;
 { TgoMongoCursor }
 
 constructor TgoMongoCursor.Create(const AProtocol: TgoMongoProtocol;
-  const AFullCollectionName: String; const AInitialPage: TArray<TBytes>;
+  const ADatabaseName, ACollectionName: String; const AInitialPage: TArray<TBytes>;
   const AInitialCursorId: Int64);
 begin
   inherited Create;
   FProtocol := AProtocol;
-  FFullCollectionName := AFullCollectionName;
+  FDatabaseName:=aDatabaseName;
+  FCollectionName := ACollectionName;
   FInitialPage := AInitialPage;
   FInitialCursorId := AInitialCursorId;
 end;
 
 function TgoMongoCursor.GetEnumerator: TEnumerator<TgoBsonDocument>;
 begin
-  Result := TEnumerator.Create(FProtocol, FFullCollectionName, FInitialPage,
+  Result := TEnumerator.Create(FProtocol, FDatabaseName, FCollectionName, FInitialPage,
     FInitialCursorId);
 end;
 
@@ -1626,12 +1620,13 @@ end;
 { TgoMongoCursor.TEnumerator }
 
 constructor TgoMongoCursor.TEnumerator.Create(const AProtocol: TgoMongoProtocol;
-  const AFullCollectionName: String; const APage: TArray<TBytes>;
+  const ADatabaseName,ACollectionName: String; const APage: TArray<TBytes>;
   const ACursorId: Int64);
 begin
   inherited Create;
   FProtocol := AProtocol;
-  FFullCollectionName := AFullCollectionName;
+  FDatabaseName:=ADatabaseName;
+  FCollectionName := ACollectionName;
   FPage := APage;
   FCursorId := ACursorId;
   FIndex := -1;
@@ -1642,7 +1637,7 @@ begin
   if fCursorID <>0 then //we exited the for...in loop before the cursor was exhausted
 	begin
 	  try
-	      FProtocol.OpKillCursors([FCursorId]);
+	      FProtocol.OpKillCursors(FDatabasename, FCollectionName, [FCursorId]);
 	  except
         //always ignore exceptions in a destructor!
 	  end;
@@ -1678,7 +1673,7 @@ begin
   { NOTE: We could pass 0 for the ANumberToReturn parameter, but that seems to
           return all remaining documents, instead of the next page.
           So instead we use the current page size. }
-  Reply := FProtocol.OpGetMore(FFullCollectionName, Length(FPage), FCursorId);
+  Reply := FProtocol.OpGetMore(FDatabaseName,FCollectionName, Length(FPage), FCursorId);
   HandleTimeout(Reply);
   FPage := Reply.Documents;
   FCursorId := Reply.CursorId;
@@ -1725,7 +1720,7 @@ begin
   Writer.WriteRawBsonDocument(AFilter.ToBson);
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(FName, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := HandleCommandReply(Reply);
 end;
 
@@ -1737,8 +1732,7 @@ begin
   inherited Create;
   FDatabase := ADatabase;
   FName := AName;
-  FFullName := ADatabase.Name + '.' + AName;
-  FFullCommandCollectionName := ADatabase.FullCommandCollectionName;
+//  FFullName := ADatabase.Name + '.' + AName;
   FProtocol := ADatabase.Protocol;
   Assert(FProtocol <> nil);
 end;
@@ -1770,7 +1764,7 @@ begin
 
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND     , [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1808,7 +1802,7 @@ begin
 
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1827,7 +1821,7 @@ begin
 
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1868,7 +1862,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteString('listIndexes', FName);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   if (Reply.Documents = nil) then
     Exit(nil);
@@ -1910,7 +1904,7 @@ begin
   AddWriteConcern(Writer);
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := HandleCommandReply(Reply);
 end;
 
@@ -1966,9 +1960,9 @@ function TgoMongoCollection.Find(const AFilter,
 var
   Reply: IgoMongoReply;
 begin
-  Reply := FProtocol.OpQuery(FFullName, [], ANumberToSkip, 0, AFilter, AProjection);
+  Reply := FProtocol.OpQuery(fDatabase.Name , fName, [], ANumberToSkip, 0, AFilter, AProjection);
   HandleTimeout(Reply);
-  Result := TgoMongoCursor.Create(FProtocol, FFullName, Reply.Documents, Reply.CursorId);
+  Result := TgoMongoCursor.Create(FProtocol, fDatabase.Name, FName, Reply.Documents, Reply.CursorId);
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter;
@@ -1989,7 +1983,7 @@ function TgoMongoCollection.FindOne(const AFilter,
 var
   Reply: IgoMongoReply;
 begin
-  Reply := FProtocol.OpQuery(FFullName, [], 0, 1, AFilter, AProjection);
+  Reply := FProtocol.OpQuery(fDatabase.Name, fName, [], 0, 1, AFilter, AProjection);
   HandleTimeout(Reply);
   if (Reply.Documents = nil) then
     Result.SetNil
@@ -2059,7 +2053,7 @@ begin
 
     Writer.WriteEndDocument;
 
-    Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+    Reply := FProtocol.OpQuery(fdatabase.Name , COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
     Inc(Result, HandleCommandReply(Reply));
   end;
   Assert(Index = ACount);
@@ -2089,7 +2083,7 @@ begin
 
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name , COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 1);
 end;
 
@@ -2124,7 +2118,7 @@ begin
 
   Writer.WriteEndDocument;
 
-  Reply := FProtocol.OpQuery(FFullCommandCollectionName, [], 0, -1, Writer.ToBson, nil);
+  Reply := FProtocol.OpQuery(fdatabase.Name , COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := HandleCommandReply(Reply);
 end;
 

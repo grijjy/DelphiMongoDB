@@ -19,6 +19,12 @@ uses
 {$ENDIF}
   Grijjy.Bson;
 
+const
+  { Virtual collection that is used for query commands }
+  COLLECTION_COMMAND = '$cmd';
+  { System collections }
+  DB_ADMIN = 'admin';
+
 type
   { Base class for MongoDB errors }
   EgoMongoDBError = class(Exception);
@@ -164,6 +170,8 @@ type
   TgoMongoProtocol = class
 {$REGION 'Internal Declarations'}
   private const
+    OP_MSG = 2013;
+    OP_REPLY = 1;
     OP_QUERY = 2004;
     OP_GET_MORE = 2005;
     OP_KILL_CURSORS = 2007;
@@ -190,11 +198,13 @@ type
     FMaxWireVersion: Integer;
   private
     procedure Send(const AData: TBytes);
+    procedure Recover;
     function WaitForReply(const ARequestId: Integer): IgoMongoReply;
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
     function LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
     function OpReplyValid(out AIndex: Integer): Boolean;
-    function OpReplyMsgHeader(out AMsgHeader): Boolean;
+    function OpReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean; overload;
+    function OpReplyMsgHeader(out AMsgHeader): Boolean; overload;
   private
     { Authentication }
     function saslStart(const APayload: string): IgoMongoReply;
@@ -211,6 +221,7 @@ type
     procedure SocketDisconnected;
     procedure SocketRecv(const ABuffer: Pointer; const ASize: Integer);
     procedure DetermineWireProtocol;
+    procedure RemoveReply(const ARequestId: Integer);
   public
     class constructor Create;
     class destructor Destroy;
@@ -256,8 +267,8 @@ type
 
       Returns:
       The reply to the query, or nil if the request timed out. }
-    function OpQuery(const AFullCollectionName: string; const AFlags: TgoMongoQueryFlags; const ANumberToSkip, ANumberToReturn: Integer;
-      const AQuery: TBytes; const AReturnFieldsSelector: TBytes = nil): IgoMongoReply;
+    function OpQuery(const ADatabase, ACollectionName: string; const AFlags: TgoMongoQueryFlags;
+      const ANumberToSkip, ANumberToReturn: Integer; const AQuery: TBytes; const AReturnFieldsSelector: TBytes = nil): IgoMongoReply;
 
     { Implements the OP_GET_MORE opcode, used to get an additional page of
       documents from the database.
@@ -276,7 +287,7 @@ type
       Returns:
       The reply to the query, or nil if the request timed out. }
 
-    function OpGetMore(const AFullCollectionName: string; const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
+    function OpGetMore(const ADatabaseName, ACollectionName: string; const ANumberToReturn: Integer; const ACursorId: Int64): IgoMongoReply;
 
     { Implements the OP_KILL_CURSORS opcode, used to free open cursors on the server.
       (wire protocol 3.0)
@@ -293,15 +304,15 @@ type
       See also:
       https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors }
 
-    procedure OpKillCursors(const ACursorIds: TArray<Int64>);
+    procedure OpKillCursors(const ADatabaseName, ACollectionName: string; const ACursorIds: TArray<Int64>);
   public
     { Authenticate error message if failed }
     property AuthErrorMessage: string read FAuthErrorMessage;
 
     { Authenticate error code if failed }
     property AuthErrorCode: Integer read FAuthErrorCode;
-    property MinWireVersion:Integer read fMinWireVersion;
-    property MaxWireVersion:Integer read fMaxWireVersion;
+    property MinWireVersion: Integer read FMinWireVersion;
+    property MaxWireVersion: Integer read FMaxWireVersion;
   end;
 
 resourcestring
@@ -321,21 +332,34 @@ type
     RequestID: Int32;
     ResponseTo: Int32;
     OpCode: Int32;
+    function NewFormat: Boolean; // true if opcode = op_msg
+    function ValidResponseHeader: Boolean;
   end;
 
   PMsgHeader = ^TMsgHeader;
 
 type
+  // The OP_REPLY message is sent by the database in response to an
+  // OP_QUERY or OP_GET_MORE message.
+  // The format of an OP_REPLY message is:
+
   TOpReplyHeader = packed record
     Header: TMsgHeader;
-    ResponseFlags: Int32;
-    CursorId: Int64;
-    StartingFrom: Int32;
-    NumberReturned: Int32;
+    ResponseFlags: Int32; // bit vector
+    CursorId: Int64; // cursor id if client needs to do get more's
+    StartingFrom: Int32; // where in the cursor this reply is starting
+    NumberReturned: Int32; // number of documents in the reply
     { Documents: Documents }
   end;
 
   POpReplyHeader = ^TOpReplyHeader;
+
+  TOPMSGHeader = packed record
+    Header: TMsgHeader;
+    flagbits: Int32;
+  end;
+
+  POpMsgHeader = ^TOPMSGHeader;
 
 type
   { Implements IgoMongoReply }
@@ -343,6 +367,7 @@ type
   private
     FHeader: TOpReplyHeader;
     FDocuments: TArray<TBytes>;
+    fNewFormat: Boolean;
   protected
     { IgoMongoReply }
     function _GetResponseFlags: TgoMongoResponseFlags;
@@ -384,7 +409,7 @@ begin
   Writer.WriteInt32('autoAuthorize', 1);
   Writer.WriteEndDocument;
 
-  Result := OpQuery(FSettings.AuthDatabase + '.$cmd', [], 0, -1, Writer.ToBson, nil);
+  Result := OpQuery(FSettings.AuthDatabase, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
 end;
 
 function TgoMongoProtocol.saslContinue(const AConversationId: Integer; const APayload: string): IgoMongoReply;
@@ -400,7 +425,7 @@ begin
   Writer.WriteBinaryData(TgoBsonBinaryData.Create(TEncoding.Utf8.GetBytes(APayload)));
   Writer.WriteEndDocument;
 
-  Result := OpQuery(FSettings.AuthDatabase + '.$cmd', [], 0, -1, Writer.ToBson, nil);
+  Result := OpQuery(FSettings.AuthDatabase, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
 end;
 
 function TgoMongoProtocol.Authenticate: Boolean;
@@ -688,12 +713,15 @@ begin
       Writer.WriteStartDocument;
       Writer.WriteInt32('hello', 1);
       Writer.WriteEndDocument;
-      Reply := OpQuery('admin.$cmd', [], 0, -1, Writer.ToBson, nil);
-      if length(Reply.Documents) > 0 then
+      Reply := OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+      if Assigned(Reply) then
       begin
-        Doc := TgoBsonDocument.Load(Reply.Documents[0]);
-        FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
-        FMinWireVersion := Doc['minWireVersion'].AsInteger;
+        if length(Reply.Documents) > 0 then
+        begin
+          Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+          FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
+          FMinWireVersion := Doc['minWireVersion'].AsInteger;
+        end;
       end;
     except
       // ignore
@@ -718,7 +746,7 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.OpGetMore(const AFullCollectionName: string; const ANumberToReturn: Integer; const ACursorId: Int64)
+function TgoMongoProtocol.OpGetMore(const ADatabaseName, ACollectionName: string; const ANumberToReturn: Integer; const ACursorId: Int64)
   : IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-get-more }
 var
@@ -727,7 +755,7 @@ var
   I: Integer;
   FullCollectionName: UTF8String;
 begin
-  FullCollectionName := UTF8String(AFullCollectionName);
+  FullCollectionName := UTF8String(ADatabaseName + '.' + ACollectionName);
   Header.MessageLength := SizeOf(TMsgHeader) + 16 + length(FullCollectionName) + 1;
   Header.RequestID := AtomicIncrement(FNextRequestId);
   Header.ResponseTo := 0;
@@ -748,7 +776,7 @@ begin
   Result := WaitForReply(Header.RequestID);
 end;
 
-procedure TgoMongoProtocol.OpKillCursors(const ACursorIds: TArray<Int64>);
+procedure TgoMongoProtocol.OpKillCursors(const ADatabaseName, ACollectionName: string; const ACursorIds: TArray<Int64>);
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors }
 var
   Header: TMsgHeader;
@@ -778,7 +806,7 @@ begin
   end;
 end;
 
-function TgoMongoProtocol.OpQuery(const AFullCollectionName: string; const AFlags: TgoMongoQueryFlags;
+function TgoMongoProtocol.OpQuery(const ADatabase, ACollectionName: string; const AFlags: TgoMongoQueryFlags;
   const ANumberToSkip, ANumberToReturn: Integer; const AQuery, AReturnFieldsSelector: TBytes): IgoMongoReply;
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-query }
 var
@@ -787,7 +815,7 @@ var
   I: Int32;
   FullCollectionName: UTF8String;
 begin
-  FullCollectionName := UTF8String(AFullCollectionName);
+  FullCollectionName := UTF8String(ADatabase + '.' + ACollectionName);
 
   Header.MessageLength := SizeOf(TMsgHeader) + 12 + length(FullCollectionName) + 1 + length(AQuery) + length(AReturnFieldsSelector);
   if (AQuery = nil) then
@@ -820,53 +848,100 @@ end;
 
 function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader): Boolean;
 begin
-  Result := (FRecvSize >= SizeOf(TMsgHeader));
+  Result := OpReplyMsgHeader(AMsgHeader, FRecvBuffer, FRecvSize);
+end;
+
+function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean;
+begin
+  Result := (Size >= SizeOf(TMsgHeader));
   if (Result) then
-    Move(FRecvBuffer[0], AMsgHeader, SizeOf(TMsgHeader));
+    Move(tb[0], AMsgHeader, SizeOf(TMsgHeader));
 end;
 
 function TgoMongoProtocol.OpReplyValid(out AIndex: Integer): Boolean;
 // https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-reply
 var
+  MsgHeader: TMsgHeader; // for format detection
   Header: POpReplyHeader;
-  Size: Int32;
-  NumberReturned: Integer;
-begin
-  AIndex := 0;
-  if (FRecvSize >= SizeOf(TOpReplyHeader)) then { minimum size }
+  DocSize: Int32;
+  ToCount: Integer;
+  NewFormat: Boolean;
+
+  function HaveBytes(aBytes: Integer): Boolean;
   begin
-    Header := @FRecvBuffer[0];
-    if (Header.NumberReturned = 0) then
-    begin
-      AIndex := SizeOf(TOpReplyHeader);
-      Result := True; { no documents, ok }
-    end
-    else
-    begin
-      { Make sure we have all the documents }
-      NumberReturned := Header.NumberReturned;
-      AIndex := SizeOf(TOpReplyHeader);
-      repeat
-        if (FRecvSize >= (AIndex + SizeOf(Int32))) then
-        begin
-          Move(FRecvBuffer[AIndex], Size, SizeOf(Int32));
-          if (FRecvSize >= (AIndex + Size)) then
-          begin
-            Dec(NumberReturned);
-            AIndex := AIndex + Size; { next }
-          end
-          else
-            Break;
-        end
-        else
-          Break;
-      until (NumberReturned = 0);
-      Result := (NumberReturned = 0); { all documents, ok }
-    end;
+    Result := (FRecvSize >= (AIndex + aBytes))
+  end;
+
+begin
+  Result := False;
+  AIndex := 0;
+  NewFormat := False;
+
+  // Detect if the reply is of the OLD (OP_reply) or NEW (OP_MSG) type
+  // and if reception of the packet is complete
+
+  if OpReplyMsgHeader(MsgHeader) then
+  begin
+    NewFormat := MsgHeader.NewFormat;
+    if FRecvSize < MsgHeader.MessageLength then
+      Exit; // reception incomplete
   end
   else
-    Result := False;
+    Exit; // Not enough bytes received
+
+  (* The rest of this code is merely counting if it has all documents that
+    the header says it must have. That is NOT a good verification and it can
+    NOT recover from any data errors. It is not able to remove a faulty record
+    from the input  buffer and can not "seek" to the next record *)
+
+  case NewFormat of
+    True:
+      begin
+        // TO DO
+      end;
+
+    False:
+      begin
+        if (FRecvSize >= SizeOf(TOpReplyHeader)) then
+        begin
+          Header := @FRecvBuffer[0];
+          AIndex := SizeOf(TOpReplyHeader); // Position just after the header
+          if (Header.NumberReturned = 0) then
+          begin
+            Result := True; { no documents, ok }
+          end
+          else
+          begin
+            { Make sure we have all the documents }
+            ToCount := Header.NumberReturned;
+            repeat
+              if HaveBytes(SizeOf(Int32)) then
+              begin
+                Move(FRecvBuffer[AIndex], DocSize, SizeOf(Int32)); // int32 value is length of bson doc
+                if HaveBytes(DocSize) then
+                begin
+                  Dec(ToCount); // OK, have this document
+                  AIndex := AIndex + DocSize; // move pointer to next document
+                end
+                else
+                  Break;
+              end
+              else
+                Break;
+            until (ToCount = 0);
+            Result := (ToCount = 0); { all documents, ok }
+            if Result then
+              AIndex := MsgHeader.MessageLength; // essential, in case a crc is appended to the end
+          end;
+        end
+        else
+          Result := False;
+      end;
+  end; // case
 end;
+
+
+// proc
 
 procedure TgoMongoProtocol.Send(const AData: TBytes);
 begin
@@ -926,7 +1001,7 @@ begin
           FRepliesLock.Release;
         end;
 
-        { Shift the receive buffer, if needed }
+        { remove the processed bytes, if needed }
         if (index = FRecvSize) then
           FRecvSize := 0
         else
@@ -934,8 +1009,8 @@ begin
       end
       else
       begin
-        { Update the partial reply timestamp }
-        if OpReplyMsgHeader(MsgHeader) then
+        { the partial reply has grown, Update the partial reply timestamp }
+        if OpReplyMsgHeader(MsgHeader) and MsgHeader.ValidResponseHeader then
         begin
           FRepliesLock.Acquire;
           try
@@ -964,19 +1039,60 @@ end;
 
 function TgoMongoProtocol.WaitForReply(const ARequestId: Integer): IgoMongoReply;
 var
-  LastRecv: TDateTime;
+  _Now, _Init, LastRecv: TDateTime;
 begin
   Result := nil;
+  _Init := Now;
   while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, Result)) do
   begin
-    if LastPartialReply(ARequestId, LastRecv) and (MillisecondsBetween(Now, LastRecv) > FSettings.ReplyTimeout) then
-      Break;
+    _Now := Now;
+    if LastPartialReply(ARequestId, LastRecv) then
+    begin
+      // give reply some time to become complete
+      if (MillisecondsBetween(_Now, LastRecv) > FSettings.ReplyTimeout) then
+        Break;
+    end
+    else // reply is nowhere to be found
+      if MillisecondsBetween(_Now, _Init) > FSettings.ReplyTimeout then
+        Break;
     Sleep(5);
   end;
 
   if (Result = nil) then
     TryGetReply(ARequestId, Result);
 
+  RemoveReply(ARequestId);
+
+  if (Result = nil) then
+    Recover; // There could be trash in the input buffer, blocking the system
+end;
+
+procedure TgoMongoProtocol.Recover;
+var
+  Index: Integer;
+  MsgHeader: TMsgHeader;
+begin
+  { remove trash from the reception buffer}
+  FRecvBufferLock.Enter;
+  try
+    if (FRecvSize > 0) and not OpReplyValid(index) then
+    begin
+      // if it begins with a valid response header, remove its statistics
+      if OpReplyMsgHeader(MsgHeader) then
+      begin
+        if MsgHeader.ValidResponseHeader then
+          RemoveReply(MsgHeader.RequestID);
+      end;
+      // Now clear the buffer
+      FRecvSize := 0;
+    end;
+  finally
+    FRecvBufferLock.Leave;
+  end;
+end;
+
+procedure TgoMongoProtocol.RemoveReply(const ARequestId: Integer);
+begin
   FRepliesLock.Acquire;
   try
     FPartialReplies.Remove(ARequestId);
@@ -990,26 +1106,32 @@ end;
 
 constructor TgoMongoReply.Create(const ABuffer: TBytes; const ASize: Integer);
 var
-  I, Index, Count: Integer;
+  I, j, Index, Count: Integer;
   Size: Int32;
   Document: TBytes;
 begin
   inherited Create;
-  if (ASize >= SizeOf(TOpReplyHeader)) then
+
+  if ASize >= SizeOf(TMsgHeader) then
   begin
-    FHeader := POpReplyHeader(@ABuffer[0])^;
+    Move(ABuffer[0], FHeader, SizeOf(FHeader.Header));
+    fNewFormat := (FHeader.Header.OpCode = 2013);
+  end;
+
+  if (ASize >= SizeOf(TOpReplyHeader)) and not fNewFormat then
+  begin
+    Move(ABuffer[0], FHeader, SizeOf(FHeader));
     if (FHeader.NumberReturned > 0) then
     begin
-      index := SizeOf(TOpReplyHeader);
+      index := SizeOf(FHeader);
+
       Count := 0;
       SetLength(FDocuments, FHeader.NumberReturned);
-
       for I := 0 to FHeader.NumberReturned - 1 do
       begin
         Move(ABuffer[index], Size, SizeOf(Int32));
         if (ASize < (index + Size)) then
           Break;
-
         SetLength(Document, Size);
         Move(ABuffer[index], Document[0], Size);
         FDocuments[Count] := Document;
@@ -1047,6 +1169,19 @@ end;
 function TgoMongoReply._GetStartingFrom: Integer;
 begin
   Result := FHeader.StartingFrom;
+end;
+
+{ TMsgHeader }
+
+function TMsgHeader.ValidResponseHeader: Boolean;
+begin
+  { VERY basic format detection, but better than nothing}
+  Result := (self.OpCode = 1) or (self.OpCode = 2013);
+end;
+
+function TMsgHeader.NewFormat: Boolean; //New wire protocol
+begin
+  Result := (self.OpCode = 2013);
 end;
 
 end.
