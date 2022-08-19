@@ -10,6 +10,7 @@ uses
   System.SyncObjs,
   System.SysUtils,
   System.Generics.Collections,
+  Grijjy.SysUtils,
 {$IF Defined(MSWINDOWS)}
   Grijjy.SocketPool.Win,
 {$ELSEIF Defined(LINUX)}
@@ -40,11 +41,11 @@ type
       if more data were received. Like any “latent cursor”, the cursor may
       become invalid at some point (CursorNotFound) – for example if the final
       object it references were deleted. }
-    TailableCursor = 1,
+    TailableCursor = 1,    //=>DBQuery.Option.Tailable   bit 1 = value 2
 
     { Allow query of replica slave. Normally these return an error except for
       namespace “local”. }
-    SlaveOk = 2,
+    SlaveOk = 2, //=>DBQuery.Option.SlaveOK bit 2 = value 4
 
     { Internal replication use only - driver should not set. }
     OplogRelay = 3,
@@ -52,23 +53,32 @@ type
     { The server normally times out idle cursors after an inactivity period
       (10 minutes) to prevent excess memory use. Set this option to prevent
       that. }
-    NoCursorTimeout = 4,
+    NoCursorTimeout = 4, //=>DBQuery.Option.NoTimeout   bit 4 = 16
 
     { Use with TailableCursor. If we are at the end of the data, block for a
       while rather than returning no data. After a timeout period, we do return
       as normal. }
-    AwaitData = 5,
+    AwaitData = 5, //=>DBQuery.Option.AwaitData   bit 5=32
 
     { Stream the data down full blast in multiple “more” packages, on the
       assumption that the client will fully read all data queried. Faster when
       you are pulling a lot of data and know you want to pull it all down.
       Note: the client is not allowed to not read all the data unless it closes the connection. }
-    Exhaust = 6,
+    Exhaust = 6,         //=>DBQuery.Option.Exhaust  bit 6=64
 
     { Get partial results from a mongos if some shards are down (instead of
       throwing an error) }
-    Partial = 7);
+    Partial = 7); //=>DBQuery.Option.Partial  bit 7=128
+
   TgoMongoQueryFlags = set of TgoMongoQueryFlag;
+
+   {Flags for new OP_MSG protocol}
+
+   TGoMongoMsgFlag = (
+    msgfChecksumPresent,
+    msgfMoreToCome,
+    msgfExhaustAllowed = 16);
+  TgoMongoMsgFlags = set of TgoMongoMsgFlag;
 
 type
   { Possible reponse flags as returned in IgoMongoReply.ReponseFlags. }
@@ -104,6 +114,8 @@ type
     function _GetStartingFrom: Integer;
     function _GetResponseTo: Integer;
     function _GetDocuments: TArray<TBytes>;
+    function _FirstDoc: TgoBsonDocument;
+
 {$ENDREGION 'Internal Declarations'}
     { Various reponse flags }
     property ReponseFlags: TgoMongoResponseFlags read _GetResponseFlags;
@@ -121,6 +133,7 @@ type
 
     { Raw BSON documents in the reply. }
     property Documents: TArray<TBytes> read _GetDocuments;
+    property FirstDoc: tgoBSONDOcument read _Firstdoc;
   end;
 
 type
@@ -167,6 +180,14 @@ type
   end;
 
 type
+  {Payload type 1 for OP_MSG}
+  tgoPayloadType1=Record
+     Name:String;
+     Docs:Tarray<tBytes>;
+     Procedure WriteTo(buffer:tgoByteBuffer);
+  end;
+
+
   TgoMongoProtocol = class
 {$REGION 'Internal Declarations'}
   private const
@@ -202,7 +223,7 @@ type
     function WaitForReply(const ARequestId: Integer): IgoMongoReply;
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
     function LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
-    function OpReplyValid(out AIndex: Integer): Boolean;
+    function OpReplyValid(OUT NewFormat:Boolean; out AIndex: Integer): Boolean;
     function OpReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean; overload;
     function OpReplyMsgHeader(out AMsgHeader): Boolean; overload;
   private
@@ -220,7 +241,7 @@ type
     procedure SocketConnected;
     procedure SocketDisconnected;
     procedure SocketRecv(const ABuffer: Pointer; const ASize: Integer);
-    procedure DetermineWireProtocol;
+    procedure InitialHandshake;
     procedure RemoveReply(const ARequestId: Integer);
   public
     class constructor Create;
@@ -305,6 +326,14 @@ type
       https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors }
 
     procedure OpKillCursors(const ADatabaseName, ACollectionName: string; const ACursorIds: TArray<Int64>);
+
+
+    function OpMsg(const ParamType0: TBytes; const ParamsType1:
+        TArray<TgoPayloadType1>; NoResponse: Boolean = False): IgoMongoReply;
+        overload;
+
+    function SupportsOpMsg: Boolean;
+
   public
     { Authenticate error message if failed }
     property AuthErrorMessage: string read FAuthErrorMessage;
@@ -318,13 +347,15 @@ type
 resourcestring
   RS_MONGODB_AUTHENTICATION_ERROR = 'Error authenticating [%d] %s';
 
+
 implementation
 
 uses
   System.DateUtils,
-  Grijjy.SysUtils,
+
   Grijjy.Bson.IO,
   Grijjy.Scram;
+
 
 type
   TMsgHeader = packed record
@@ -356,18 +387,30 @@ type
 
   TOPMSGHeader = packed record
     Header: TMsgHeader;
-    flagbits: Int32;
+    flagbits: TGoMongoMsgFlags; //32 bits because msgfExhaustAllowed = 16
   end;
 
   POpMsgHeader = ^TOPMSGHeader;
 
-type
+
+  tMsgPayload = class
+    const EmptyDocSize=5;
+    //class procedure Overflow;
+    class function ReadBsonDoc(out BSON: TBytes; Buffer: Pointer; BytesAvail:
+        Integer; var BytesRead: Integer): Boolean;
+
+    class function DecodeSequence(SeqStart: Pointer; SizeAvail: Integer; var
+        SizeRead: Integer; var PayloadType: Byte; var Name: string; var data:
+        TArray<TBytes>): Boolean;
+  end;
+
+
   { Implements IgoMongoReply }
   TgoMongoReply = class(TInterfacedObject, IgoMongoReply)
   private
     FHeader: TOpReplyHeader;
     FDocuments: TArray<TBytes>;
-    fNewFormat: Boolean;
+    fFirstdoc:TGOBsonDocument;
   protected
     { IgoMongoReply }
     function _GetResponseFlags: TgoMongoResponseFlags;
@@ -375,9 +418,32 @@ type
     function _GetStartingFrom: Integer;
     function _GetResponseTo: Integer;
     function _GetDocuments: TArray<TBytes>;
+    function _FirstDoc:TgoBsonDocument;
   public
     constructor Create(const ABuffer: TBytes; const ASize: Integer);
   end;
+
+type
+  { Implements IgoMongoReply }
+  TgoMongoMsgReply = class(TInterfacedObject, IgoMongoReply)
+  private
+    FHeader: TOpMsgHeader;
+    FDocuments: TArray<TBytes>;
+    fFirstdoc:TGOBsonDocument;
+  protected
+    { IgoMongoReply }
+    function _GetResponseFlags: TgoMongoResponseFlags;
+    function _GetCursorId: Int64;
+    function _GetStartingFrom: Integer;
+    function _GetResponseTo: Integer;
+    function _GetDocuments: TArray<TBytes>;
+    function _FirstDoc:TgoBsonDocument;
+  public
+    constructor Create(const ABuffer: TBytes; const ASize: Integer);
+  end;
+
+
+
 
   { TgoMongoProtocol }
 
@@ -459,11 +525,10 @@ begin
 
     if MongoReply = nil then
       Exit(False);
-
-    if MongoReply.Documents = nil then
+    ConversationDoc :=mongoreply.FirstDoc;
+    if ConversationDoc.IsNil then
       Exit(False);
 
-    ConversationDoc := TgoBsonDocument.Load(MongoReply.Documents[0]);
     Ok := ConversationDoc['ok'];
     if not Ok then
     begin
@@ -497,11 +562,10 @@ begin
 
     if MongoReply = nil then
       Exit(False);
-
-    if MongoReply.Documents = nil then
+    ConversationDoc :=mongoreply.FirstDoc;
+    if ConversationDoc.IsNil then
       Exit(False);
 
-    ConversationDoc := TgoBsonDocument.Load(MongoReply.Documents[0]);
     Ok := ConversationDoc['ok'];
     if not Ok then
     begin
@@ -527,14 +591,12 @@ begin
 
     { Step 3 - Acknowledge with an empty payload }
     MongoReply := saslContinue(Scram.ConversationId, '');
-
     if MongoReply = nil then
       Exit(False);
-
-    if MongoReply.Documents = nil then
+    ConversationDoc :=mongoreply.FirstDoc;
+    if ConversationDoc.IsNil then
       Exit(False);
 
-    ConversationDoc := TgoBsonDocument.Load(MongoReply.Documents[0]);
     Ok := ConversationDoc['ok'];
     if not Ok then
     begin
@@ -653,7 +715,7 @@ begin
   FCompletedReplies := TDictionary<Integer, IgoMongoReply>.Create;
   FPartialReplies := TDictionary<Integer, TDateTime>.Create;
   SetLength(FRecvBuffer, RECV_BUFFER_SIZE);
-  DetermineWireProtocol;
+  InitialHandshake;
 end;
 
 destructor TgoMongoProtocol.Destroy;
@@ -696,7 +758,155 @@ begin
   inherited;
 end;
 
-procedure TgoMongoProtocol.DetermineWireProtocol;
+
+
+
+
+
+
+class function tMsgPayload.ReadBsonDoc(out BSON: TBytes; Buffer: Pointer;
+    BytesAvail: Integer; var BytesRead: Integer): Boolean;
+VAR DocSize:Integer;
+begin
+  BytesRead:=0;
+  SetLength(BSON, 0);
+  Result := False;
+  if BytesAvail >= EmptyDocSize then
+  begin
+    move(Buffer^, DocSize, sizeof(Integer)); //read integer into "BytesRead"
+    if (BytesAvail >= DocSize) AND (DocSize >= EmptyDocSize) then  //buffer is big enough?
+    begin
+        BytesRead:=DocSize;
+        SetLength(BSON, DocSize);
+        move(Buffer^, BSON[0], DocSize);
+        result:=True;   //OK
+    end;
+  end;
+end;
+
+class function tMsgPayload.DecodeSequence(SeqStart: Pointer; SizeAvail:
+    Integer; var SizeRead: Integer; var PayloadType: Byte; var Name: string;
+    var data: TArray<TBytes>): Boolean;
+
+  {SeqStart: Start of the section, first byte that follows is the PayloadType
+   SizeAvail: Available size from SeqStart to the end of the buffer
+   if result=True:
+   -> SizeRead:  the size of the processed section.
+   -> PayloadType: the decoded payload type
+   -> Name: The name of the payload, if PayloadType=1
+   -> Data: An array of BSON docs.
+  }
+var
+  PayloadSize, offs, PayloadStart: Integer;
+  c: ansichar;
+  Cstring: utf8string;
+
+
+  function cursor:Pointer;
+  begin
+    result:= Pointer(intptr(SeqStart) + offs);
+  end;
+
+  procedure read(var output; bytes: Integer); // Simulate simple memory stream
+  begin
+    move(cursor^, output, bytes);
+    inc(offs, bytes);
+  end;
+
+  procedure peek(var output; bytes: Integer); // Simulate simple memory stream
+  var
+    startoffs: Integer;
+  begin
+    startoffs := offs;
+    read(output, bytes);
+    offs := startoffs;
+  end;
+
+  function BufLeft: Integer;
+  begin
+    Result := SizeAvail - offs;
+  end;
+
+  function PayloadLeft:Integer;
+  var PayloadProcessed: Integer;
+  begin
+    PayloadProcessed:= offs - PayloadStart;
+    result:=PayloadSize - PayloadProcessed;
+  end;
+
+
+
+
+  function AppendDoc(var AData: TArray<TBytes>): Boolean;
+  var
+    tb: TBytes;
+    bRead: Integer;
+  begin
+    Result := ReadBsonDoc(tb, cursor, PayloadLeft, bRead);
+    if Result then
+    begin
+      SetLength(AData, length(AData) + 1);
+      AData[high(AData)] := tb;
+      inc(offs, bRead); // acknowledge read
+    end;
+  end;
+
+begin
+  Result := False;
+  name := '';
+  offs := 0;
+  SizeRead := 0;
+  SetLength(data, 0);
+  Cstring := '';
+  PayloadSize := 0;
+
+  if BufLeft >= (1 + EmptyDocSize) then // minimum size is 1 byte (payloadtype) + empty bson doc
+  begin
+    read(PayloadType, 1);
+    PayloadStart := offs; // to count how many bytes were processed from THIS point
+    if (PayloadType in [0, 1]) then
+    begin
+      peek(PayloadSize, sizeof(PayloadSize)); // Peek the payload size counter
+      if (BufLeft >= PayloadSize) and (PayloadSize >=0) then  //Plausibility check
+      begin
+        case PayloadType of
+          0:
+            Result := AppendDoc(data); // Type 0: pull in ONE BSON doc
+
+          1: // Type 1: payload with string header, having [zero or more] BSON docs
+            begin
+              inc (offs,sizeof(integer)); //jump over payload counter - we already have it
+              //Read string header
+              while PayloadLeft > 0 do
+              begin
+                read(c, 1);
+                if c <> #0 then
+                  break;
+                Cstring := Cstring + c;
+              end; // while
+              name := string(Cstring);
+
+              Result := True; // the specs say "0 or more" BSON documents, so 0 is acceptable
+
+              // pull in as many docs as allowed
+              while PayloadLeft > 0 do
+              begin
+                if not AppendDoc(data) then
+                  break;
+              end; // while
+            end; // case 1
+        end; // case
+      end; // if
+    end; // if PayloadType
+  end; // if bufleft
+
+  if Result then
+    SizeRead := sizeof(Byte) + PayloadSize; // Should be identical with offs
+
+end;
+
+
+procedure TgoMongoProtocol.InitialHandshake;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
@@ -709,23 +919,50 @@ begin
   begin
     FMaxWireVersion := 1;
     try
+      // https://github.com/mongodb/specifications/blob/master/source/mongodb-handshake/handshake.rst
+
+      { isMaster is the deprecated LEGACY version of the hello command. }
+
       Writer := TgoBsonWriter.Create;
       Writer.WriteStartDocument;
-      Writer.WriteInt32('hello', 1);
+      Writer.WriteInt32('isMaster', 1);
       Writer.WriteEndDocument;
       Reply := OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
       if Assigned(Reply) then
       begin
-        if length(Reply.Documents) > 0 then
+        Doc:=Reply.FirstDoc;
+        if not Doc.IsNil then
         begin
-          Doc := TgoBsonDocument.Load(Reply.Documents[0]);
           FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
           FMinWireVersion := Doc['minWireVersion'].AsInteger;
         end;
       end;
+
+        //TEST MSG PROTOCOL
+
+        Writer := TgoBsonWriter.Create;
+        Writer.WriteStartDocument;
+        Writer.WriteInt32('hello', 1);
+        Writer.WriteString('$db', 'admin');
+        Writer.WriteEndDocument;
+        Reply := Opmsg(Writer.ToBson,NIL);
+        if Assigned(Reply) then
+        begin
+          Doc:=Reply.FirstDoc;
+          if not Doc.IsNil then
+          begin
+            FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
+            FMinWireVersion := Doc['minWireVersion'].AsInteger;
+          end;
+        end;
+
     except
       // ignore
     end;
+
+    // "hello" is the modern and preferred command. It must always be issued using the
+    // op_msg protocol.
+
   end;
 end;
 
@@ -751,27 +988,28 @@ function TgoMongoProtocol.OpGetMore(const ADatabaseName, ACollectionName: string
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-get-more }
 var
   Header: TMsgHeader;
-  Data: TgoByteBuffer;
+  pHeader: PMsgHeader;
+  data: tgoByteBuffer;
   I: Integer;
-  FullCollectionName: UTF8String;
+  FullCollectionName: utf8string;
 begin
-  FullCollectionName := UTF8String(ADatabaseName + '.' + ACollectionName);
-  Header.MessageLength := SizeOf(TMsgHeader) + 16 + length(FullCollectionName) + 1;
+  FullCollectionName := utf8string(ADatabaseName + '.' + ACollectionName);
   Header.RequestID := AtomicIncrement(FNextRequestId);
   Header.ResponseTo := 0;
   Header.OpCode := OP_GET_MORE;
-
-  Data := TgoByteBuffer.Create(Header.MessageLength);
+  data := tgoByteBuffer.Create;
   try
-    Data.AppendBuffer(Header, SizeOf(TMsgHeader));
+    data.AppendBuffer(Header, sizeof(TMsgHeader));
     I := 0;
-    Data.AppendBuffer(I, SizeOf(Int32)); // Reserved
-    Data.AppendBuffer(FullCollectionName[low(UTF8String)], length(FullCollectionName) + 1);
-    Data.AppendBuffer(ANumberToReturn, SizeOf(Int32));
-    Data.AppendBuffer(ACursorId, SizeOf(Int64));
-    Send(Data.ToBytes);
+    data.AppendBuffer(I, sizeof(Int32)); // Reserved
+    data.AppendBuffer(FullCollectionName[low(utf8string)], length(FullCollectionName) + 1);
+    data.AppendBuffer(ANumberToReturn, sizeof(Int32));
+    data.AppendBuffer(ACursorId, sizeof(Int64));
+    pHeader := @data.Buffer[0];
+    pHeader.MessageLength := data.Size;
+    Send(data.ToBytes);
   finally
-    Data.Free;
+    data.Free;
   end;
   Result := WaitForReply(Header.RequestID);
 end;
@@ -780,30 +1018,90 @@ procedure TgoMongoProtocol.OpKillCursors(const ADatabaseName, ACollectionName: s
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#op-kill_cursors }
 var
   Header: TMsgHeader;
-  Data: TgoByteBuffer;
+  pHeader: PMsgHeader;
+  data: tgoByteBuffer;
   I: Int32;
 begin
   if length(ACursorIds) <> 0 then
   begin
-    Header.MessageLength := SizeOf(TMsgHeader) + 2 * SizeOf(Int32) + length(ACursorIds) * SizeOf(Int64);
     Header.RequestID := AtomicIncrement(FNextRequestId);
     Header.ResponseTo := 0;
     Header.OpCode := OP_KILL_CURSORS;
-    Data := TgoByteBuffer.Create(Header.MessageLength);
+    data := tgoByteBuffer.Create;
     try
-      Data.AppendBuffer(Header, SizeOf(TMsgHeader));
+      data.AppendBuffer(Header, sizeof(TMsgHeader));
       I := 0;
-      Data.AppendBuffer(I, SizeOf(Int32)); // Reserved
+      data.AppendBuffer(I, sizeof(Int32)); // Reserved
       I := length(ACursorIds);
-      Data.AppendBuffer(I, SizeOf(Int32)); // Number of cursors to delete
+      data.AppendBuffer(I, sizeof(Int32)); // Number of cursors to delete
       for I := 0 to high(ACursorIds) do
-        Data.AppendBuffer(ACursorIds[I], SizeOf(Int64));
-      Send(Data.ToBytes);
+        data.AppendBuffer(ACursorIds[I], sizeof(Int64));
+      pHeader := @data.Buffer[0];
+      pHeader.MessageLength := data.Size;
+      Send(data.ToBytes);
     finally
-      Data.Free;
+      data.Free;
     end;
     // The OP_KILL_CURSORS from wire protocol 3.0 does NOT return a result.
   end;
+end;
+
+
+
+function TgoMongoProtocol.OpMsg(const ParamType0: TBytes; const ParamsType1:
+    TArray<TgoPayloadType1>; NoResponse: Boolean = False): IgoMongoReply;
+VAR
+  H: TOPMsgHeader;
+  pH: POPMsgHeader;
+  data: tgoByteBuffer;
+  i:integer;
+  T:tBytes;
+  paramtype:Byte;
+begin
+  H.Header.RequestID := AtomicIncrement(FNextRequestId);
+  H.Header.ResponseTo := 0;
+  H.Header.OpCode := OP_MSG;
+  H.flagbits:=[];
+  if NoResponse then
+     H.flagbits :=[TGoMongoMsgFlag.msgfMoreToCome];
+
+  data := tgoByteBuffer.Create;
+  try
+    data.AppendBuffer(H, sizeof(H));
+
+    //Append parameter of type 0
+    paramtype:=0;
+    data.Append(paramtype);
+
+    // Every op_msg MUST have ONE section of payload type 0.
+    // this is the standard command document, like
+    // {"insert": "collection"}, plus write concern and other
+    // command arguments. It does not have to contain a BSON
+    // array of documents, however. These may be outsourced
+    // to parameters of type 1.
+    data.Append(ParamType0);
+
+    // Document Stream: the big win comes here.
+    // This is the same simple format as Ye Olde Wire Protocol,
+    // which is very efficient to assemble and disassemble.
+
+   for i:=0 to high(ParamsType1) do
+      ParamsType1[i].WriteTo(data);
+
+    // write optional checksum here
+    //...
+    //update bytecount in header
+    pH := @data.Buffer[0];
+    pH.Header.MessageLength := data.Size;
+    Send(data.ToBytes);
+  finally
+    data.Free;
+  end;
+
+  if NoResponse then
+     Result:=NIL
+  else
+     Result := WaitForReply(H.Header.RequestID);
 end;
 
 function TgoMongoProtocol.OpQuery(const ADatabase, ACollectionName: string; const AFlags: TgoMongoQueryFlags;
@@ -811,37 +1109,34 @@ function TgoMongoProtocol.OpQuery(const ADatabase, ACollectionName: string; cons
 { https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-query }
 var
   Header: TMsgHeader;
-  Data: TgoByteBuffer;
+  pHeader: PMsgHeader;
+  data: tgoByteBuffer;
   I: Int32;
-  FullCollectionName: UTF8String;
+  FullCollectionName: utf8string;
 begin
-  FullCollectionName := UTF8String(ADatabase + '.' + ACollectionName);
-
-  Header.MessageLength := SizeOf(TMsgHeader) + 12 + length(FullCollectionName) + 1 + length(AQuery) + length(AReturnFieldsSelector);
-  if (AQuery = nil) then
-    Inc(Header.MessageLength, length(EMPTY_DOCUMENT));
+  FullCollectionName := utf8string(ADatabase + '.' + ACollectionName);
   Header.RequestID := AtomicIncrement(FNextRequestId);
   Header.ResponseTo := 0;
   Header.OpCode := OP_QUERY;
-
-  Data := TgoByteBuffer.Create(Header.MessageLength);
+  data := tgoByteBuffer.Create;
   try
-    Data.AppendBuffer(Header, SizeOf(TMsgHeader));
+    data.AppendBuffer(Header, sizeof(TMsgHeader));
     I := Byte(AFlags) or Byte(FSettings.QueryFlags);
-    Data.AppendBuffer(I, SizeOf(Int32));
-    Data.AppendBuffer(FullCollectionName[low(UTF8String)], length(FullCollectionName) + 1);
-    Data.AppendBuffer(ANumberToSkip, SizeOf(Int32));
-    Data.AppendBuffer(ANumberToReturn, SizeOf(Int32));
+    data.AppendBuffer(I, sizeof(Int32));
+    data.AppendBuffer(FullCollectionName[low(utf8string)], length(FullCollectionName) + 1);
+    data.AppendBuffer(ANumberToSkip, sizeof(Int32));
+    data.AppendBuffer(ANumberToReturn, sizeof(Int32));
     if (AQuery <> nil) then
-      Data.Append(AQuery)
+      data.Append(AQuery)
     else
-      Data.Append(EMPTY_DOCUMENT);
+      data.Append(EMPTY_DOCUMENT);
     if (AReturnFieldsSelector <> nil) then
-      Data.Append(AReturnFieldsSelector);
-
-    Send(Data.ToBytes);
+      data.Append(AReturnFieldsSelector);
+    pHeader := @data.Buffer[0];
+    pHeader.MessageLength := data.Size;
+    Send(data.ToBytes);
   finally
-    Data.Free;
+    data.Free;
   end;
   Result := WaitForReply(Header.RequestID);
 end;
@@ -853,19 +1148,18 @@ end;
 
 function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean;
 begin
-  Result := (Size >= SizeOf(TMsgHeader));
+  Result := (Size >= sizeof(TMsgHeader));
   if (Result) then
-    Move(tb[0], AMsgHeader, SizeOf(TMsgHeader));
+    move(tb[0], AMsgHeader, sizeof(TMsgHeader));
 end;
 
-function TgoMongoProtocol.OpReplyValid(out AIndex: Integer): Boolean;
+function TgoMongoProtocol.OpReplyValid(OUT NewFormat:Boolean; out AIndex: Integer): Boolean;
 // https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-reply
 var
   MsgHeader: TMsgHeader; // for format detection
   Header: POpReplyHeader;
-  DocSize: Int32;
+  docsize: Int32;
   ToCount: Integer;
-  NewFormat: Boolean;
 
   function HaveBytes(aBytes: Integer): Boolean;
   begin
@@ -878,7 +1172,7 @@ begin
   NewFormat := False;
 
   // Detect if the reply is of the OLD (OP_reply) or NEW (OP_MSG) type
-  // and if reception of the packet is complete
+  // and detect if enough bytes were received.
 
   if OpReplyMsgHeader(MsgHeader) then
   begin
@@ -897,15 +1191,17 @@ begin
   case NewFormat of
     True:
       begin
-        // TO DO
+        { TODO : Needs to be better }
+        Result := True;
+        AIndex := MsgHeader.MessageLength;
       end;
 
     False:
       begin
-        if (FRecvSize >= SizeOf(TOpReplyHeader)) then
+        if (FRecvSize >= sizeof(TOpReplyHeader)) then
         begin
           Header := @FRecvBuffer[0];
-          AIndex := SizeOf(TOpReplyHeader); // Position just after the header
+          AIndex := sizeof(TOpReplyHeader); // Position just after the header
           if (Header.NumberReturned = 0) then
           begin
             Result := True; { no documents, ok }
@@ -915,23 +1211,24 @@ begin
             { Make sure we have all the documents }
             ToCount := Header.NumberReturned;
             repeat
-              if HaveBytes(SizeOf(Int32)) then
+              if HaveBytes(sizeof(Int32)) then
               begin
-                Move(FRecvBuffer[AIndex], DocSize, SizeOf(Int32)); // int32 value is length of bson doc
-                if HaveBytes(DocSize) then
+                // consume 4 bytes "size"
+                move(FRecvBuffer[AIndex], docsize, sizeof(Int32));
+                if HaveBytes(docsize) then
                 begin
                   Dec(ToCount); // OK, have this document
-                  AIndex := AIndex + DocSize; // move pointer to next document
+                  AIndex := AIndex + docsize; // move pointer to next document
                 end
                 else
-                  Break;
+                  break;
               end
               else
-                Break;
+                break;
             until (ToCount = 0);
             Result := (ToCount = 0); { all documents, ok }
             if Result then
-              AIndex := MsgHeader.MessageLength; // essential, in case a crc is appended to the end
+              AIndex := MsgHeader.MessageLength; // essential, just in case a crc is appended to the end
           end;
         end
         else
@@ -972,6 +1269,7 @@ var
   MongoReply: IgoMongoReply;
   Index: Integer;
   MsgHeader: TMsgHeader;
+  newformat:Boolean;
 begin
   FRecvBufferLock.Enter;
   try
@@ -980,15 +1278,17 @@ begin
       SetLength(FRecvBuffer, (FRecvSize + ASize) * 2);
 
     { Append the new buffer }
-    Move(ABuffer^, FRecvBuffer[FRecvSize], ASize);
+    move(ABuffer^, FRecvBuffer[FRecvSize], ASize);
     FRecvSize := FRecvSize + ASize;
 
     { Is there one or more valid replies pending? }
     while True do
     begin
-      if OpReplyValid(index) then
+      if OpReplyValid(Newformat, index) then
       begin
-        MongoReply := TgoMongoReply.Create(FRecvBuffer, FRecvSize);
+        if not newformat
+          then MongoReply := TgoMongoReply.Create(FRecvBuffer, index)
+          else MongoReply := TgoMongoMsgReply.Create(FRecvBuffer, index);
 
         FRepliesLock.Acquire;
         try
@@ -1005,7 +1305,7 @@ begin
         if (index = FRecvSize) then
           FRecvSize := 0
         else
-          Move(FRecvBuffer[index], FRecvBuffer[0], FRecvSize - index);
+          move(FRecvBuffer[index], FRecvBuffer[0], FRecvSize - index);
       end
       else
       begin
@@ -1019,12 +1319,17 @@ begin
             FRepliesLock.Release;
           end;
         end;
-        Break;
+        break;
       end;
     end;
   finally
     FRecvBufferLock.Leave;
   end;
+end;
+
+function TgoMongoProtocol.SupportsOpMsg: Boolean;
+begin
+  Result := (FMaxWireVersion >= 6);
 end;
 
 function TgoMongoProtocol.TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean;
@@ -1050,11 +1355,11 @@ begin
     begin
       // give reply some time to become complete
       if (MillisecondsBetween(_Now, LastRecv) > FSettings.ReplyTimeout) then
-        Break;
+        break;
     end
     else // reply is nowhere to be found
       if MillisecondsBetween(_Now, _Init) > FSettings.ReplyTimeout then
-        Break;
+        break;
     Sleep(5);
   end;
 
@@ -1071,11 +1376,12 @@ procedure TgoMongoProtocol.Recover;
 var
   Index: Integer;
   MsgHeader: TMsgHeader;
+  newformat:boolean;
 begin
-  { remove trash from the reception buffer}
+  { remove trash from the reception buffer }
   FRecvBufferLock.Enter;
   try
-    if (FRecvSize > 0) and not OpReplyValid(index) then
+    if (FRecvSize > 0) and not OpReplyValid(newformat,index) then
     begin
       // if it begins with a valid response header, remove its statistics
       if OpReplyMsgHeader(MsgHeader) then
@@ -1102,7 +1408,7 @@ begin
   end;
 end;
 
-{ TgoMongoReply }
+{ OLD FORMAT TgoMongoReply }
 
 constructor TgoMongoReply.Create(const ABuffer: TBytes; const ASize: Integer);
 var
@@ -1111,32 +1417,26 @@ var
   Document: TBytes;
 begin
   inherited Create;
-
-  if ASize >= SizeOf(TMsgHeader) then
+  fFirstdoc.SetNil;
+  if (ASize >= sizeof(TOpReplyHeader))  then
   begin
-    Move(ABuffer[0], FHeader, SizeOf(FHeader.Header));
-    fNewFormat := (FHeader.Header.OpCode = 2013);
-  end;
-
-  if (ASize >= SizeOf(TOpReplyHeader)) and not fNewFormat then
-  begin
-    Move(ABuffer[0], FHeader, SizeOf(FHeader));
+    move(ABuffer[0], FHeader, sizeof(FHeader));
     if (FHeader.NumberReturned > 0) then
     begin
-      index := SizeOf(FHeader);
+      index := sizeof(FHeader);
 
       Count := 0;
       SetLength(FDocuments, FHeader.NumberReturned);
       for I := 0 to FHeader.NumberReturned - 1 do
       begin
-        Move(ABuffer[index], Size, SizeOf(Int32));
+        move(ABuffer[index], Size, sizeof(Int32));
         if (ASize < (index + Size)) then
-          Break;
+          break;
         SetLength(Document, Size);
-        Move(ABuffer[index], Document[0], Size);
+        move(ABuffer[index], Document[0], Size);
         FDocuments[Count] := Document;
-        Inc(index, Size);
-        Inc(Count);
+        inc(index, Size);
+        inc(Count);
       end;
 
       SetLength(FDocuments, Count);
@@ -1144,6 +1444,16 @@ begin
   end
   else
     FHeader.CursorId := -1;
+end;
+
+function TgoMongoReply._FirstDoc: TgoBsonDocument;
+begin
+  if ffirstdoc.IsNil then
+  begin
+    if length (fdocuments) > 0 then
+        fFirstDoc := TgoBsonDocument.Load(fDocuments[0]);
+  end;
+  Result:=fFirstDoc;
 end;
 
 function TgoMongoReply._GetCursorId: Int64;
@@ -1175,13 +1485,120 @@ end;
 
 function TMsgHeader.ValidResponseHeader: Boolean;
 begin
-  { VERY basic format detection, but better than nothing}
+  { VERY basic format detection, but better than nothing }
   Result := (self.OpCode = 1) or (self.OpCode = 2013);
 end;
 
-function TMsgHeader.NewFormat: Boolean; //New wire protocol
+function TMsgHeader.NewFormat: Boolean; // New wire protocol
 begin
   Result := (self.OpCode = 2013);
 end;
+
+
+
+
+{ TgoMongoMsgReply }
+
+constructor TgoMongoMsgReply.Create(const ABuffer: TBytes; const ASize: Integer);
+var
+  I, j, Index, Count,k: Integer;
+  Size: Int32;
+  DocBuf: Tarray<TBytes>;
+  Data:Pointer;
+  ofs,Avail,SizeRead:integer;
+  PayloadType: Byte;
+  Name:String;
+begin
+  inherited Create;
+  fFirstdoc.SetNil;
+  if (ASize >= sizeof(TOpReplyHeader))  then
+  begin
+    move(ABuffer[0], FHeader, sizeof(FHeader));
+    ofs:=sizeof(fheader);
+    Data:=@Abuffer[ofs];
+    Avail:=fHeader.Header.MessageLength-Ofs;
+    WHILE tmsgPayload.DecodeSequence(Data,Avail,SizeRead, PayloadType,Name, DocBuf) do
+    begin
+        k:=Length(fdocuments);
+        setlength(fdocuments,K+length(DocBuf));
+        for i:=0 to high(DocBuf) do
+           fdocuments[k+i]:=DocBuf[i];
+         Avail:=Avail-SizeRead;
+         INC(intptr(data),SizeRead);
+    end;
+  end ;
+end;
+
+function TgoMongoMsgReply._FirstDoc: TgoBsonDocument;
+begin
+  if ffirstdoc.IsNil then
+  begin
+    if length (fdocuments) > 0 then
+        fFirstDoc := TgoBsonDocument.Load(fDocuments[0]);
+  end;
+  Result:=fFirstDoc;
+end;
+
+function TgoMongoMsgReply._GetCursorId: Int64;
+var doc:tgoBsonDocument;
+    cursor:tgoBsonValue;
+begin
+    result:=0;
+    Doc:=_FirstDoc;
+    if not Doc.IsNil then
+    begin
+         cursor:=doc['cursor'];
+         if not cursor.IsNil then
+             result:=cursor.AsBsonDocument['id'];
+    end;
+end;
+
+function TgoMongoMsgReply._GetDocuments: TArray<TBytes>;
+begin
+   result:=fDocuments;
+end;
+
+function TgoMongoMsgReply._GetResponseFlags: TgoMongoResponseFlags;
+begin
+   result:=[];
+   { TODO : noch tun }
+end;
+
+function TgoMongoMsgReply._GetResponseTo: Integer;
+begin
+   result:=fheader.Header.ResponseTo;
+end;
+
+function TgoMongoMsgReply._GetStartingFrom: Integer;
+begin
+  { TODO : noch tun }
+end;
+
+{ tgoPayloadType1 }
+
+procedure tgoPayloadType1.WriteTo(buffer: tgoByteBuffer);
+{ Convert an arbitrary number of bson documents into a MSG payload of type 1 }
+var
+  CString: utf8string;
+  MarkPos,i,SomeInteger: Integer;
+  pSize: pInteger;
+  payloadType: Byte;
+begin
+    payloadType := 1;
+    buffer.Append(payloadType);//before "size" marker
+    MarkPos:=buffer.Size;   //Position of the "size" marker in the stream
+    SomeInteger := 0;
+    buffer.Append(SomeInteger); //placeholder for Size
+    CString := utf8string(Name);
+    buffer.AppendBuffer(CString[low(utf8string)], length(CString) + 1); //string plus #0
+    if assigned(Docs) then
+      for i:=0 to high(Docs) do
+         if assigned(Docs[i]) then
+            buffer.Append(Docs[i]);
+    pSize := @buffer.Buffer[MarkPos];
+    pSize^ := buffer.Size-MarkPos;
+end;
+
+initialization
 
 end.

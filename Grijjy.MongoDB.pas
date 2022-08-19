@@ -6,6 +6,7 @@ unit Grijjy.MongoDB;
 interface
 
 uses
+winapi.Windows,
   System.SysUtils,
   System.Generics.Collections,
   Grijjy.Bson,
@@ -684,9 +685,9 @@ type
       Parameters:
         AFilter: filter containing query operators to search for the document
           that matches the filter.
-        ASort: (optional) use this to find the maximum or minimum value of a field. 
-          An empty filter (tgomongofilter.Empty) with ASort=tgomongosort.Descending('price') 
-          will return the document having the highest 'price'. 
+        ASort: (optional) use this to find the maximum or minimum value of a field.
+          An empty filter (tgomongofilter.Empty) with ASort=tgomongosort.Descending('price')
+          will return the document having the highest 'price'.
           For best performance, use indexes in the collection.
         AProjection: (optional) projection that specifies the fields to return
           in the document that matches the query filter. If not specified, then
@@ -898,11 +899,11 @@ begin
   if (AReply = nil) then
     raise EgoMongoDBConnectionError.Create(RS_MONGODB_CONNECTION_ERROR);
 
-  if (AReply.Documents = nil) then
+  Doc := aReply.FirstDoc;
+  if Doc.IsNil then
     { Everything OK }
     Exit(0);
 
-  Doc := TgoBsonDocument.Load(AReply.Documents[0]);
   { Return number of documents affected }
   Result := Doc['n'];
 
@@ -1175,11 +1176,21 @@ var
   Reply: IgoMongoReply;
 begin
   Writer := TgoBsonWriter.Create;
-  Writer.WriteStartDocument;
-  Writer.WriteInt32('dropDatabase', 1);
-  Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(AName , COLLECTION_COMMAND,
-    [], 0, -1, Writer.ToBson, nil);
+
+  if fprotocol.SupportsOpMsg then
+  begin
+    Writer.WriteStartDocument;
+    Writer.WriteInt32('dropDatabase', 1);
+    Writer.WriteString('$db',AName);
+    Writer.WriteEndDocument;
+    Reply := FProtocol.OpMsg(writer.ToBson,NIL);
+  end else
+  begin
+    Writer.WriteStartDocument;
+    Writer.WriteInt32('dropDatabase', 1);
+    Writer.WriteEndDocument;
+    Reply := FProtocol.OpQuery(AName , COLLECTION_COMMAND,  [], 0, -1, Writer.ToBson, nil);
+  end;
   HandleCommandReply(Reply);
 end;
 
@@ -1210,15 +1221,27 @@ var
   I: Integer;
 begin
   Writer := TgoBsonWriter.Create;
-  Writer.WriteStartDocument;
-  Writer.WriteInt32('listDatabases', 1);
-  Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  if fprotocol.SupportsOpMsg then
+  begin
+    Writer.WriteStartDocument;
+    Writer.WriteInt32('listDatabases', 1);
+    writer.WriteString('$db','admin');
+    Writer.WriteEndDocument;
+    Reply := FProtocol.OpMsg(writer.ToBson,NIL);
+  end else
+  begin
+    Writer.WriteStartDocument;
+    Writer.WriteInt32('listDatabases', 1);
+    Writer.WriteEndDocument;
+    Reply := FProtocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  end;
+
   HandleCommandReply(Reply);
-  if (Reply.Documents = nil) then
+  Doc:=Reply.FirstDoc;
+
+  if Doc.IsNil then
     Exit(nil);
 
-  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
   if (not Doc.TryGetValue('databases', Value)) then
     Exit(nil);
   Databases := Value.AsBsonArray;
@@ -1239,6 +1262,7 @@ var
   Value: TgoBsonValue;
   I: Integer;
 begin
+{ TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteInt32('isMaster', 1);
@@ -1252,10 +1276,9 @@ begin
   Reply := FProtocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 
-  if not(Reply.Documents = nil) then
+  Doc:=Reply.FirstDoc;
+  if not (doc.IsNil) then
   begin
-    Doc := TgoBsonDocument.Load(Reply.Documents[0]);
-
     Result.Primary      := TgoMongoInstance.Create(Doc.Get('primary','').ToString);
     Result.Me           := TgoMongoInstance.Create(Doc.Get('me','').ToString);
     Result.SetName      := Doc.Get('setName','').ToString;
@@ -1302,13 +1325,15 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   CommandToIssue(Writer); // let the anonymous method write the commands
+  if FProtocol.SupportsOpMsg then
+    Writer.WriteString('$db', 'admin');
   Writer.WriteEndDocument;
-  Reply := Protocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
-  HandleCommandReply(Reply);
-  if not(Reply.Documents = nil) then
-    Result := TgoBsonDocument.Load(Reply.Documents[0])
+  if FProtocol.SupportsOpMsg then
+    Reply := Protocol.OpMsg(Writer.ToBson, nil)
   else
-    Result.SetNil;
+    Reply := Protocol.OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+  Result := Reply.FirstDoc;
 end;
 
 function TgoMongoClient.BuildInfo: TgoBsonDocument;
@@ -1384,13 +1409,15 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   CommandToIssue(Writer); // let the anonymous method write the commands
+  if fprotocol.SupportsOpMsg then
+    writer.WriteString('$db',Name);
   Writer.WriteEndDocument;
-  Reply := Protocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
-  HandleCommandReply(Reply);
-  if not(Reply.Documents = nil) then
-    Result := TgoBsonDocument.Load(Reply.Documents[0])
+  if protocol.SupportsOpMsg then
+    reply:=protocol.OpMsg(Writer.ToBson,NIL)
   else
-    Result.SetNil;
+    Reply := Protocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  HandleCommandReply(Reply);
+  Result:=Reply.FirstDoc;
 end;
 
 
@@ -1425,14 +1452,19 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('dbStats', 1);
   Writer.WriteInt32('scale', AScale);
+  if fprotocol.SupportsOpMsg then
+    Writer.WriteString('$db',FName);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+
+  if fprotocol.SupportsOpMsg then
+    Reply:=fprotocol.opMsg(Writer.ToBson,NIL)
+  else
+    Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+
   HandleCommandReply(Reply);
-
-  if (Reply.Documents = nil) then
+  Doc:=Reply.FirstDoc;
+  if Doc.IsNil then
     raise EgoMongoDBError.Create(RS_MONGODB_GENERIC_ERROR);
-
-  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
 
   Result.Database    := Doc.Get('db','').ToString;
   Result.Collections := Doc.Get('collections',0).ToInteger;
@@ -1521,23 +1553,33 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteInt32('listCollections', 1);
+  if fProtocol.SupportsOpMsg then
+    Writer.WriteString('$db',FName);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpQuery(FName, COLLECTION_COMMAND,[], 0, -1, Writer.ToBson, nil);
+  if fProtocol.SupportsOpMsg then
+    Reply:=fProtocol.OpMsg(Writer.ToBson,NIL)
+  Else
+    Reply := FProtocol.OpQuery(FName, COLLECTION_COMMAND,[], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  if (Reply.Documents = nil) then
+
+  Doc:=Reply.FirstDoc;
+  if Doc.IsNil then
     Exit(nil);
 
   { NOTE: The reply contains a cursor with the first batch of documents.
     However, the batch always seems to contain the documents for ALL collections
     collections in the database, so there is no need for manual paging. }
-  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
+
+
   if (not Doc.TryGetValue('cursor', Value)) then
     Exit(nil);
   Cursor := Value.AsBsonDocument;
 
+  { TODO : if cursor.id <>0 there is more to come and we
+   should evaluate "ns" which we need to close the cursor }
+
   if (not Cursor.TryGetValue('firstBatch', Value)) then
     Exit(nil);
-
   Docs := Value.AsBsonArray;
   SetLength(Result, Docs.Count);
   for I := 0 to Docs.Count - 1 do
@@ -1552,14 +1594,17 @@ var
   Reply: IgoMongoReply;
 begin
   Writer := TgoBsonWriter.Create;
-
   Writer.WriteStartDocument;
   Writer.WriteString('renameCollection', AFromNamespace);
   Writer.WriteString('to', AToNamespace);
   Writer.WriteBoolean('dropTarget', ADropTarget);
+  if fProtocol.SupportsOpMsg then
+      Writer.WriteString('$db',FName);
   Writer.WriteEndDocument;
-
-  Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+    if fProtocol.SupportsOpMsg then
+    Reply:=fProtocol.OpMsg(Writer.ToBson,NIL)
+  Else {opquery}
+    Reply := FProtocol.OpQuery(FName,COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1602,7 +1647,6 @@ begin
   Count := 0;
   Capacity := 16;
   SetLength(Result, Capacity);
-
   for Doc in Self do
   begin
     if (Count >= Capacity) then
@@ -1633,11 +1677,27 @@ begin
 end;
 
 destructor TgoMongoCursor.TEnumerator.Destroy;
+var
+  Writer: IgoBsonWriter;
+  Reply: IgoMongoReply;
 begin
   if fCursorID <>0 then //we exited the for...in loop before the cursor was exhausted
 	begin
 	  try
-	      FProtocol.OpKillCursors(FDatabasename, FCollectionName, [FCursorId]);
+       if fprotocol.SupportsOpMsg then
+        begin
+          writer:=tgobsonwriter.Create;
+          Writer.WriteStartDocument;
+          Writer.WriteString('killCursors', fCollectionName);
+          Writer.WriteStartArray('cursors');
+          writer.WriteInt64(fCursorID);
+          Writer.WriteEndArray;
+          Writer.WriteString('$db',fDatabaseName);
+          Writer.WriteEndDocument;
+         { tell protocol to NOT expect a result - saves one roundtrip }
+          Reply := FProtocol.OpMsg(writer.ToBson,NIL,TRUE);
+        end
+        else  FProtocol.OpKillCursors(FDatabasename, FCollectionName, [FCursorId]);
 	  except
         //always ignore exceptions in a destructor!
 	  end;
@@ -1669,15 +1729,60 @@ end;
 procedure TgoMongoCursor.TEnumerator.GetMore;
 var
   Reply: IgoMongoReply;
+  Writer: IgoBsonWriter;
+  adoc, Doc, cursor: TgoBsonDocument;
+  nextBatch: TgoBsonArray;
+  Value: TgoBsonValue;
+  I: Integer;
 begin
   { NOTE: We could pass 0 for the ANumberToReturn parameter, but that seems to
-          return all remaining documents, instead of the next page.
-          So instead we use the current page size. }
-  Reply := FProtocol.OpGetMore(FDatabaseName,FCollectionName, Length(FPage), FCursorId);
+    return all remaining documents, instead of the next page.
+    So instead we use the current page size. }
+
+  { TODO : VERIFY CORRECT FUNCTIONING }
+
+  if FProtocol.SupportsOpMsg then
+  begin
+    Writer := TgoBsonWriter.Create;
+    Writer.WriteStartDocument;
+    Writer.WriteInt64('getMore', FCursorId);
+    Writer.WriteString('collection', FCollectionName);
+    Writer.WriteInt32('batchSize', Length(FPage));
+    { TODO : MaxTimeMS }
+    Writer.WriteString('$db', FDatabaseName);
+    Writer.WriteEndDocument;
+    Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  end
+  else
+    Reply := FProtocol.OpGetMore(FDatabaseName, FCollectionName, Length(FPage), FCursorId);
+
   HandleTimeout(Reply);
-  FPage := Reply.Documents;
-  FCursorId := Reply.CursorId;
   FIndex := 0;
+  SetLength(FPage, 0);
+
+  if FProtocol.SupportsOpMsg then
+  begin
+    adoc := Reply.FirstDoc;
+    if adoc.Contains('cursor') then
+    begin
+      Cursor := adoc['cursor'].AsBsonDocument;
+      // The cursor ID should become 0 when it is exhausted
+      FCursorId := cursor['id']; // less overhead to do it here, than query reply.cursorid
+      nextBatch := cursor['nextBatch'].AsBsonArray;
+      I := 0;
+      for Value in nextBatch do
+      begin
+        SetLength(FPage, I + 1);
+        FPage[I] := Value.AsBsonDocument.ToBson;
+        Inc(I);
+      end;
+    end;
+  end
+  else
+  begin
+    FCursorId := Reply.CursorId;
+    FPage := Reply.Documents; // dumb chain of documents
+  end;
 end;
 
 { TgoMongoCollection }
@@ -1713,14 +1818,18 @@ var
   Reply: IgoMongoReply;
 begin
   Writer := TgoBsonWriter.Create;
-
   Writer.WriteStartDocument;
   Writer.WriteString('count', FName);
   Writer.WriteName('query');
   Writer.WriteRawBsonDocument(AFilter.ToBson);
+  if fProtocol.SupportsOpMsg then
+     Writer.WriteString('$db',FName);
   Writer.WriteEndDocument;
-
-  Reply := FProtocol.OpQuery(FName, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+  { TODO : Verify }
+  if fProtocol.SupportsOpMsg then
+       Reply:=fProtocol.OpMsg(Writer.ToBson,NIL)
+  Else {opquery}
+       Reply := FProtocol.OpQuery(FName, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := HandleCommandReply(Reply);
 end;
 
@@ -1732,7 +1841,6 @@ begin
   inherited Create;
   FDatabase := ADatabase;
   FName := AName;
-//  FFullName := ADatabase.Name + '.' + AName;
   FProtocol := ADatabase.Protocol;
   Assert(FProtocol <> nil);
 end;
@@ -1745,10 +1853,10 @@ var
   Reply: IgoMongoReply;
   i: Integer;
 begin
+{ TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('createIndexes', FName);
-
   Writer.WriteStartArray('indexes');
   Writer.WriteStartDocument;
   Writer.WriteStartDocument('key');
@@ -1759,11 +1867,8 @@ begin
   Writer.WriteBoolean('unique', AUnique);
   Writer.WriteEndDocument;
   Writer.WriteEndArray;
-
   AddWriteConcern(Writer);
-
   Writer.WriteEndDocument;
-
   Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND     , [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
@@ -1777,6 +1882,7 @@ var
   Reply: IgoMongoReply;
   i: Integer;
 begin
+{ TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('createIndexes', FName);
@@ -1797,9 +1903,7 @@ begin
 
   Writer.WriteEndDocument;
   Writer.WriteEndArray;
-
   AddWriteConcern(Writer);
-
   Writer.WriteEndDocument;
 
   Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
@@ -1812,15 +1916,13 @@ var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
 begin
+{ TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('dropIndexes', FName);
   Writer.WriteString('index', AName);
-
   AddWriteConcern(Writer);
-
   Writer.WriteEndDocument;
-
   Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
@@ -1858,16 +1960,18 @@ var
   Docs: TgoBsonArray;
   I: Integer;
 begin
+{ TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('listIndexes', FName);
   Writer.WriteEndDocument;
   Reply := FProtocol.OpQuery(fdatabase.Name, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  if (Reply.Documents = nil) then
+
+  Doc:=Reply.FirstDoc;
+  if Doc.IsNil then
     Exit(nil);
 
-  Doc := TgoBsonDocument.Load(Reply.Documents[0]);
   if (not Doc.TryGetValue('cursor', Value)) then
     Exit(nil);
   Cursor := Value.AsBsonDocument;
@@ -1888,11 +1992,10 @@ var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
 begin
+{ TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
-
   Writer.WriteString('delete', FName);
-
   Writer.WriteStartArray('deletes');
   Writer.WriteStartDocument;
   Writer.WriteName('q');
@@ -1900,7 +2003,6 @@ begin
   Writer.WriteInt32('limit', ALimit);
   Writer.WriteEndDocument;
   Writer.WriteEndArray;
-
   AddWriteConcern(Writer);
   Writer.WriteEndDocument;
 
@@ -1960,6 +2062,7 @@ function TgoMongoCollection.Find(const AFilter,
 var
   Reply: IgoMongoReply;
 begin
+{ TODO : Support OP_MSG }
   Reply := FProtocol.OpQuery(fDatabase.Name , fName, [], ANumberToSkip, 0, AFilter, AProjection);
   HandleTimeout(Reply);
   Result := TgoMongoCursor.Create(FProtocol, fDatabase.Name, FName, Reply.Documents, Reply.CursorId);
@@ -1983,12 +2086,10 @@ function TgoMongoCollection.FindOne(const AFilter,
 var
   Reply: IgoMongoReply;
 begin
+{ TODO : Support OP_MSG }
   Reply := FProtocol.OpQuery(fDatabase.Name, fName, [], 0, 1, AFilter, AProjection);
   HandleTimeout(Reply);
-  if (Reply.Documents = nil) then
-    Result.SetNil
-  else
-    Result := TgoBsonDocument.Load(Reply.Documents[0]);
+  Result:=Reply.FirstDoc;
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection;
@@ -2046,11 +2147,8 @@ begin
     end;
     Dec(Remaining, ItemsInBatch);
     Writer.WriteEndArray;
-
     Writer.WriteBoolean('ordered', AOrdered);
-
     AddWriteConcern(Writer);
-
     Writer.WriteEndDocument;
 
     Reply := FProtocol.OpQuery(fdatabase.Name , COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
@@ -2074,15 +2172,11 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('insert', FName);
-
   Writer.WriteStartArray('documents');
   Writer.WriteValue(ADocument);
   Writer.WriteEndArray;
-
   AddWriteConcern(Writer);
-
   Writer.WriteEndDocument;
-
   Reply := FProtocol.OpQuery(fdatabase.Name , COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 1);
 end;
@@ -2098,9 +2192,7 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('update', FName);
-
   Writer.WriteStartArray('updates');
-
   Writer.WriteStartDocument;
   Writer.WriteName('q');
   Writer.WriteRawBsonDocument(AFilter.ToBson);
@@ -2109,13 +2201,9 @@ begin
   Writer.WriteBoolean('upsert', AUpsert);
   Writer.WriteBoolean('multi', AMulti);
   Writer.WriteEndDocument;
-
   Writer.WriteEndArray;
-
   Writer.WriteBoolean('ordered', AOrdered);
-
   AddWriteConcern(Writer);
-
   Writer.WriteEndDocument;
 
   Reply := FProtocol.OpQuery(fdatabase.Name , COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
