@@ -1787,6 +1787,9 @@ end;
 
 { TgoMongoCollection }
 
+
+//As of Mongo 3.2, $orderby is deprecated.
+
 class function TgoMongoCollection.AddModifier(const AFilter: TgoMongoFilter;
   const ASort: TgoMongoSort): TBytes;
 var
@@ -2056,6 +2059,7 @@ begin
   Result := Find(AddModifier(AFilter, ASort), AProjection.ToBson, ANumberToSkip);
 end;
 
+(*
 function TgoMongoCollection.Find(const AFilter,
   AProjection: TBytes; const ANumberToSkip : Integer = 0): IgoMongoCursor;
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
@@ -2067,6 +2071,84 @@ begin
   HandleTimeout(Reply);
   Result := TgoMongoCursor.Create(FProtocol, fDatabase.Name, FName, Reply.Documents, Reply.CursorId);
 end;
+  *)
+function TgoMongoCollection.Find(const AFilter,
+  AProjection: TBytes; const ANumberToSkip : Integer = 0): IgoMongoCursor;
+// https://docs.mongodb.com/manual/reference/method/db.collection.find
+var
+  Reply: IgoMongoReply;
+  Writer: IgoBsonWriter;
+  Doc, Cursor: TgoBsonDocument;
+  Value: TgoBsonValue;
+  Docs: TgoBsonArray;
+  I: Integer;
+  CursorID:Int64;
+  Alldocs:Tarray<tBytes>;
+begin
+  // Important info here !!!!!
+  // https://www.mongodb.com/docs/manual/reference/command/find/
+
+  //hier maandag verder gaan.
+  result:=Nil;
+  if FProtocol.SupportsOpMsg then
+  begin
+    Writer := TgoBsonWriter.Create;
+    Writer.WriteStartDocument;
+    Writer.WriteString('find', FName);
+    if Assigned(AFilter) then
+    begin
+      Writer.WriteName('filter');
+      Writer.WriteRawBsonDocument(AFilter);
+    end;
+    if Assigned(AProjection) then
+    begin
+      Writer.WriteName('projection');
+      Writer.WriteRawBsonDocument(AProjection);
+    end;
+    Writer.WriteInt32('skip', ANumberToSkip);
+    Writer.WriteString('$db', Fdatabase.Name);
+    Writer.WriteEndDocument;
+
+    //noCursorTimeout boolean
+
+    Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+    HandleTimeout(Reply);
+
+    Doc := Reply.FirstDoc;
+    if not Doc.IsNil then
+    begin
+      outputdebugstring(pchar(doc.ToJson));
+
+
+      if Doc.TryGetValue('cursor', Value) then
+      begin
+        Cursor := Value.AsBsonDocument;
+        CursorId := cursor['id'];
+        if Cursor.TryGetValue('firstBatch', Value) then
+        begin
+          Docs := Value.AsBsonArray;
+
+          SetLength(AllDocs, Docs.Count);
+          for I := 0 to Docs.Count - 1 do
+             Alldocs[I] := Docs[I].AsBsonDocument.ToBson;
+
+          Result := TgoMongoCursor.Create(FProtocol, fDatabase.Name, FName, AllDocs,CursorID) ;
+
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    Reply := FProtocol.OpQuery(fDatabase.Name , fName, [], ANumberToSkip, 0, AFilter, AProjection);
+    HandleTimeout(Reply);
+    Result := TgoMongoCursor.Create(FProtocol, fDatabase.Name, FName, Reply.Documents, Reply.CursorId) ;
+  end;
+end;
+
+
+
+
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter;
   const AProjection: TgoMongoProjection): TgoBsonDocument;
@@ -2080,16 +2162,69 @@ begin
   Result := FindOne(AFilter.ToBson, nil);
 end;
 
-function TgoMongoCollection.FindOne(const AFilter,
-  AProjection: TBytes): TgoBsonDocument;
+function TgoMongoCollection.FindOne(const AFilter, AProjection: TBytes): TgoBsonDocument;
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
 var
   Reply: IgoMongoReply;
+  Writer: IgoBsonWriter;
+  Doc, Cursor: TgoBsonDocument;
+  Value: TgoBsonValue;
+  Docs: TgoBsonArray;
+  I: Integer;
 begin
-{ TODO : Support OP_MSG }
-  Reply := FProtocol.OpQuery(fDatabase.Name, fName, [], 0, 1, AFilter, AProjection);
-  HandleTimeout(Reply);
-  Result:=Reply.FirstDoc;
+  // Important info here !!!!!
+  // https://www.mongodb.com/docs/manual/reference/command/find/
+
+  //hier maandag verder gaan.
+
+  if FProtocol.SupportsOpMsg then
+  begin
+    Result.SetNil;
+    Writer := TgoBsonWriter.Create;
+    Writer.WriteStartDocument;
+    Writer.WriteString('find', FName);
+    if Assigned(AFilter) then
+    begin
+      Writer.WriteName('filter');
+      Writer.WriteRawBsonDocument(AFilter);
+    end;
+    if Assigned(AProjection) then
+    begin
+      Writer.WriteName('projection');
+      Writer.WriteRawBsonDocument(AProjection);
+    end;
+    Writer.WriteInt32('limit', 1); // limit total result set to 1
+    //Writer.WriteInt32('batchSize', 1); // limit batch size to 1 (default is 101) --> redundant
+    Writer.WriteBoolean('singleBatch', True); // close cursor after first batch
+    Writer.WriteString('$db', Fdatabase.Name);
+    Writer.WriteEndDocument;
+
+    Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+    HandleTimeout(Reply);
+
+    Doc := Reply.FirstDoc;
+    if not Doc.IsNil then
+    begin
+      if Doc.TryGetValue('cursor', Value) then
+      begin
+        Cursor := Value.AsBsonDocument;
+        //we don't need the cursor ID
+        //FCursorId := cursor['id'];
+        if Cursor.TryGetValue('firstBatch', Value) then
+        begin
+          Docs := Value.AsBsonArray;
+          if Docs.Count > 0 then     //need Just the first one
+            Result := Docs[0].AsBsonDocument;
+        end;
+      end;
+    end;
+  end
+  else
+  begin
+    Reply := FProtocol.OpQuery(FDatabase.Name, FName, [], 0, 1, AFilter, AProjection);
+    HandleTimeout(Reply);
+    Result := Reply.FirstDoc;
+  end;
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection;
