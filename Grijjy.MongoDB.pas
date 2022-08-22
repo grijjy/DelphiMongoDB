@@ -1623,7 +1623,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteString('count', FName);
   if FProtocol.SupportsOpMsg then
-    Writer.WriteString('$db', FName);
+    Writer.WriteString('$db', Fdatabase.name);
   Writer.WriteName('query');
   Writer.WriteRawBsonDocument(AFilter.ToBson);
   Writer.WriteEndDocument;
