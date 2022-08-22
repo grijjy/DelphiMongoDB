@@ -1471,6 +1471,7 @@ type
        Example: <code>TgrMongoSort.MetaTextScore('awesome')</code>
        results in <tt>{awesome: {$meta: "textScore"}}</tt> *)
     class function MetaTextScore(const AFieldName: String): TgoMongoSort; static;
+
   end;
 
 type
