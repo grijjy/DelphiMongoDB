@@ -112,7 +112,8 @@ type
     function _GetResponseTo: Integer;
     function _GetDocuments: TArray<TBytes>;
     function _FirstDoc: TgoBsonDocument;
-
+    function _GetDocumentNames: TArray<String>;
+    function _GetDocumentTypes: TArray<Byte>;
 {$ENDREGION 'Internal Declarations'}
     { Various reponse flags }
     property ReponseFlags: TgoMongoResponseFlags read _GetResponseFlags;
@@ -129,11 +130,11 @@ type
     property ResponseTo: Integer read _GetResponseTo;
 
     { Raw BSON documents in the reply. }
-    { TODO :
-    This interface is obsolete, it does not do justice to the new
-    OP_MSG system with two different types of payload. }
-    property Documents: TArray<TBytes> read _GetDocuments;
+    {This interface is obsolete}
     property FirstDoc: TgoBsonDocument read _FirstDoc;
+    property Documents: TArray<TBytes> read _GetDocuments;
+    Property DocumentNames:   TArray<String> read _GetDocumentNames;
+    Property DocumentTypes:    TArray<Byte> read _GetDocumentTypes;
   end;
 
 type
@@ -223,8 +224,8 @@ type
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
     function LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
     function OpReplyValid(out NewFormat: Boolean; out AIndex: Integer): Boolean;
-    function OpReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean; overload;
-    function OpReplyMsgHeader(out AMsgHeader): Boolean; overload;
+    function HaveReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean; overload;
+    function HaveReplyMsgHeader(out AMsgHeader): Boolean; overload;
   private
     { Authentication }
     function saslStart(const APayload: string): IgoMongoReply;
@@ -402,6 +403,8 @@ type
   private
     FHeader: TOpReplyHeader;
     FDocuments: TArray<TBytes>;
+    FDocumentTypes: tArray<Byte>;
+    FDocumentNames: tarray<String>;
     fFirstdoc: TgoBsonDocument;
   protected
     { IgoMongoReply }
@@ -410,6 +413,9 @@ type
     function _GetStartingFrom: Integer;
     function _GetResponseTo: Integer;
     function _GetDocuments: TArray<TBytes>;
+    function _GetDocumentNames: TArray<String>;
+    function _GetDocumentTypes: TArray<byte>;
+
     function _FirstDoc: TgoBsonDocument;
   public
     constructor Create(const ABuffer: TBytes; const ASize: Integer);
@@ -421,6 +427,8 @@ type
   private
     FHeader: TOPMSGHeader;
     FDocuments: TArray<TBytes>;
+    FDocumentTypes: tArray<Byte>;
+    FDocumentNames: tarray<String>;
     fFirstdoc: TgoBsonDocument;
   protected
     { IgoMongoReply }
@@ -429,6 +437,8 @@ type
     function _GetStartingFrom: Integer;
     function _GetResponseTo: Integer;
     function _GetDocuments: TArray<TBytes>;
+    function _GetDocumentNames: TArray<String>;
+    function _GetDocumentTypes: TArray<byte>;
     function _FirstDoc: TgoBsonDocument;
   public
     constructor Create(const ABuffer: TBytes; const ASize: Integer);
@@ -453,6 +463,9 @@ begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteInt32('saslStart', 1);
+  if SupportsOpMsg then
+    writer.WriteString('$db',FSettings.AuthDatabase);
+
   if FSettings.AuthMechanism = TgoMongoAuthMechanism.SCRAM_SHA_1 then
     Writer.WriteString('mechanism', 'SCRAM-SHA-1')
   else
@@ -460,11 +473,13 @@ begin
 
   Writer.WriteName('payload');
   Writer.WriteBinaryData(TgoBsonBinaryData.Create(TEncoding.Utf8.GetBytes(APayload)));
-
   Writer.WriteInt32('autoAuthorize', 1);
   Writer.WriteEndDocument;
 
-  Result := OpQuery(FSettings.AuthDatabase, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+ if SupportsOpMsg then
+    result:=OpMsg(writer.ToBson,NIL)
+  else
+    Result := OpQuery(FSettings.AuthDatabase, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
 end;
 
 function TgoMongoProtocol.saslContinue(const AConversationId: Integer; const APayload: string): IgoMongoReply;
@@ -475,12 +490,17 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('saslContinue', 1);
   Writer.WriteInt32('conversationId', AConversationId);
+  if SupportsOpMsg then
+    writer.WriteString('$db', FSettings.AuthDatabase);
 
   Writer.WriteName('payload');
   Writer.WriteBinaryData(TgoBsonBinaryData.Create(TEncoding.Utf8.GetBytes(APayload)));
   Writer.WriteEndDocument;
 
-  Result := OpQuery(FSettings.AuthDatabase, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
+ if SupportsOpMsg then
+    result:=OpMsg(writer.ToBson,NIL)
+  else
+    Result := OpQuery(FSettings.AuthDatabase, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
 end;
 
 function TgoMongoProtocol.Authenticate: Boolean;
@@ -905,6 +925,7 @@ begin
       Writer.WriteStartDocument;
       Writer.WriteInt32('isMaster', 1);
       Writer.WriteEndDocument;
+      //LEGACY OpQuery
       Reply := OpQuery(DB_ADMIN, COLLECTION_COMMAND, [], 0, -1, Writer.ToBson, nil);
       if Assigned(Reply) then
       begin
@@ -915,11 +936,9 @@ begin
           FMinWireVersion := Doc['minWireVersion'].AsInteger;
         end;
       end;
-
     except
       // ignore
     end;
-
     // "hello" is the modern and preferred command. It must always be issued using the
     // op_msg protocol.
 
@@ -1099,12 +1118,12 @@ begin
   Result := WaitForReply(Header.RequestID);
 end;
 
-function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader): Boolean;
+function TgoMongoProtocol.HaveReplyMsgHeader(out AMsgHeader): Boolean;
 begin
-  Result := OpReplyMsgHeader(AMsgHeader, FRecvBuffer, FRecvSize);
+  Result := HaveReplyMsgHeader(AMsgHeader, FRecvBuffer, FRecvSize);
 end;
 
-function TgoMongoProtocol.OpReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean;
+function TgoMongoProtocol.HaveReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean;
 begin
   Result := (Size >= sizeof(TMsgHeader));
   if (Result) then
@@ -1132,7 +1151,7 @@ begin
   // Detect if the reply is of the OLD (OP_reply) or NEW (OP_MSG) type
   // and detect if enough bytes were received.
 
-  if OpReplyMsgHeader(MsgHeader) then
+  if HaveReplyMsgHeader(MsgHeader) then
   begin
     NewFormat := MsgHeader.NewFormat;
     if FRecvSize < MsgHeader.MessageLength then
@@ -1269,7 +1288,7 @@ begin
       else
       begin
         { the partial reply has grown, Update the partial reply timestamp }
-        if OpReplyMsgHeader(MsgHeader) and MsgHeader.ValidResponseHeader then
+        if HaveReplyMsgHeader(MsgHeader) and MsgHeader.ValidResponseHeader then
         begin
           FRepliesLock.Acquire;
           try
@@ -1343,7 +1362,7 @@ begin
     if (FRecvSize > 0) and not OpReplyValid(NewFormat, index) then
     begin
       // if it begins with a valid response header, remove its statistics
-      if OpReplyMsgHeader(MsgHeader) then
+      if HaveReplyMsgHeader(MsgHeader) then
       begin
         if MsgHeader.ValidResponseHeader then
           RemoveReply(MsgHeader.RequestID);
@@ -1386,6 +1405,9 @@ begin
 
       Count := 0;
       SetLength(FDocuments, FHeader.NumberReturned);
+      SetLength(FDocumentNames, FHeader.NumberReturned); //filled with empty strings - is as-desired
+      SetLength(FDocumentTypes, FHeader.NumberReturned); //filled with 0s - is as-desired
+
       for I := 0 to FHeader.NumberReturned - 1 do
       begin
         move(ABuffer[index], Size, sizeof(Int32));
@@ -1420,9 +1442,19 @@ begin
   Result := FHeader.CursorId;
 end;
 
+function TgoMongoReply._GetDocumentNames: TArray<String>;
+begin
+  result:=fdocumentnames;
+end;
+
 function TgoMongoReply._GetDocuments: TArray<TBytes>;
 begin
   Result := FDocuments;
+end;
+
+function TgoMongoReply._GetDocumentTypes: TArray<byte>;
+begin
+  result:=fdocumenttypes;
 end;
 
 function TgoMongoReply._GetResponseFlags: TgoMongoResponseFlags;
@@ -1461,7 +1493,7 @@ var
   Size: Int32;
   DocBuf: TArray<TBytes>;
   data: Pointer;
-  ofs, Avail, SizeRead: Integer;
+  ofs, Avail, SizeRead, NewSize: Integer;
   PayloadType: Byte;
   Name: string;
 begin
@@ -1476,9 +1508,17 @@ begin
     while tMsgPayload.DecodeSequence(data, Avail, SizeRead, PayloadType, name, DocBuf) do
     begin
       k := length(FDocuments);
-      SetLength(FDocuments, k + length(DocBuf));
+      NewSize:=k + length(DocBuf);
+      SetLength(FDocuments, NewSize);
+      Setlength(fDocumentTypes,NewSize);
+      Setlength(fDocumentNames,NewSize);
+
       for I := 0 to high(DocBuf) do
+      begin
         FDocuments[k + I] := DocBuf[I];
+        fDocumentTypes[k+i]:=PayloadType;
+        fDocumentNames[k+i]:=Name;
+      end;
       Avail := Avail - SizeRead;
       inc(intptr(data), SizeRead);
     end;
@@ -1510,9 +1550,19 @@ begin
   end;
 end;
 
+function TgoMongoMsgReply._GetDocumentNames: TArray<String>;
+begin
+  Result:=fDocumentNames;
+end;
+
 function TgoMongoMsgReply._GetDocuments: TArray<TBytes>;
 begin
   Result := FDocuments;
+end;
+
+function TgoMongoMsgReply._GetDocumentTypes: TArray<byte>;
+begin
+  Result:=fDocumentTypes;
 end;
 
 function TgoMongoMsgReply._GetResponseFlags: TgoMongoResponseFlags;
@@ -1528,7 +1578,7 @@ end;
 
 function TgoMongoMsgReply._GetStartingFrom: Integer;
 begin
-  { TODO : noch tun }
+  result:=-1; //obsolete
 end;
 
 { tgoPayloadType1 }
