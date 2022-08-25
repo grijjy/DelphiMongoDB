@@ -664,9 +664,6 @@ uses
 
 {$POINTERMATH ON}
 
-const
-  { Maximum number of documents that can be written in bulk at once }
-  MAX_BULK_SIZE = 1000;
 
   { If no reply was received within timeout seconds, throw an exception }
 procedure HandleTimeout(const AReply: IgoMongoReply); inline;
@@ -814,9 +811,25 @@ type
 {$ENDREGION 'Internal Declarations'}
   end;
 
+
+function HasCursor (const ADoc: TgoBsonDocument; VAR Cursor:tgoBSONDocument; VAR CursorID: Int64; VAR Namespace:String):Boolean; Inline;
+var temp:tgoBSONValue;
+begin
+  Cursor.SetNil;
+  CursorID:=0;
+  Namespace:='';
+  Result:=(ADoc.TryGetValue('cursor', temp));
+  if result then
+  begin
+     cursor:=temp.AsBsonDocument;
+     CursorID := Cursor['id']; // 0=cursor exhausted, else more data can be pulled
+     Namespace := Cursor.Get('ns', '').ToString(); // databasename.CollectionNameOrCommand
+  end;
+end;
+
 function firstBatchToCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol): IgoMongoCursor;
 var
-  Doc, Cursor: TgoBsonDocument;
+  Cursor: TgoBsonDocument;
   Value: TgoBsonValue;
   I: Integer;
   CursorID: Int64;
@@ -828,11 +841,8 @@ begin
   Result := nil;
   if not ADoc.IsNil then
   begin
-    if (ADoc.TryGetValue('cursor', Value)) then
+    if HasCursor(ADoc,Cursor,CursorID,Namespace) then
     begin
-      Cursor := Value.AsBsonDocument;
-      CursorID := Cursor['id']; // 0=cursor exhausted, else more data can be pulled
-      Namespace := Cursor.Get('ns', '').ToString(); // databasename.CollectionNameOrCommand
       if (Cursor.TryGetValue('firstBatch', Value)) then
       begin
         Docs := Value.AsBsonArray; // tgoBSONArray
@@ -1045,8 +1055,6 @@ var
   Reply: IgoMongoReply;
   Doc: TgoBsonDocument;
   InstArray: TgoBsonArray;
-  Databases: TgoBsonArray;
-  Value: TgoBsonValue;
   I: Integer;
 begin
   { TODO : Support OP_MSG }
@@ -1183,8 +1191,6 @@ begin
 end;
 
 constructor TgoMongoDatabase.Create(const AClient: TgoMongoClient; const AName: string);
-var
-  Doc: TgoBsonDocument;
 begin
   Assert(AClient <> nil);
   Assert(AName <> '');
@@ -1271,7 +1277,6 @@ const ACollation: TgoMongoCollation): Boolean;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
-  I: Integer;
 begin
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
@@ -1487,7 +1492,7 @@ procedure TgoMongoCursor.TEnumerator.GetMore;
 var
   Reply: IgoMongoReply;
   Writer: IgoBsonWriter;
-  ADoc, Doc, Cursor: TgoBsonDocument;
+  ADoc, Cursor: TgoBsonDocument;
   Docs: TgoBsonArray;
   Value: TgoBsonValue;
   I: Integer;
@@ -1674,10 +1679,6 @@ function TgoMongoCollection.ListIndexes: TArray<TgoBsonDocument>;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
-  Doc, Cursor: TgoBsonDocument;
-  Value: TgoBsonValue;
-  Docs: TgoBsonArray;
-  I: Integer;
 begin
   Result := nil;
   Writer := TgoBsonWriter.Create;
@@ -1777,14 +1778,6 @@ const ANumberToSkip: Integer = 0): IgoMongoCursor;
 var
   Reply: IgoMongoReply;
   Writer: IgoBsonWriter;
-  Doc, Cursor: TgoBsonDocument;
-  Value: TgoBsonValue;
-  Docs: TgoBsonArray;
-  I: Integer;
-  CursorID: Int64;
-  Alldocs: TArray<TBytes>;
-  tbfilter, tbprojection: TBytes;
-  // NameSpace:String;
 begin
   Result := nil;
 
@@ -1822,8 +1815,6 @@ var
   Doc, Cursor: TgoBsonDocument;
   Value: TgoBsonValue;
   Docs: TgoBsonArray;
-  I: Integer;
-  tbfilter, tbprojection: TBytes;
 begin
   // Important info here !!!!!
   // https://www.mongodb.com/docs/manual/reference/command/find/
@@ -1920,34 +1911,73 @@ function TgoMongoCollection.InsertMany(const ADocuments: PgoBsonDocument; const 
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
-  I, Remaining, ItemsInBatch, Index: Integer;
+  I, Remaining, ItemsInBatch, Index, BytesEncoded: Integer;
+  tb: TBytes;
+  Payload0: TBytes;
+  Payload1: TArray<tgoPayloadType1>;
+
 begin
   Remaining := ACount;
   index := 0;
   Result := 0;
+  BytesEncoded := 0;
   while (Remaining > 0) do
   begin
+    ItemsInBatch := Min(Remaining, fprotocol.MaxWriteBatchSize);
+    SetLength(Payload1, 0);
     Writer := TgoBsonWriter.Create;
     Writer.WriteStartDocument;
     Writer.WriteString('insert', FName);
     SpecifyDB(Writer);
 
-    { TODO : Append as PayloadType1 instead }
-    Writer.WriteStartArray('documents');
-    ItemsInBatch := Min(Remaining, MAX_BULK_SIZE);
-    for I := 0 to ItemsInBatch - 1 do
-    begin
+    (* DEPRECATED
+      {This is the SLOW/LEGACY method because the server needs to unpack
+      an array contained inside a very large document.
+      It is faster to "outsource" the "documents" array into a separate
+      sequence of Payload type 1}
+      Writer.WriteStartArray('documents');
+      for I := 0 to ItemsInBatch - 1 do
+      begin
       Writer.WriteValue(ADocuments[index]);
       Inc(index);
-    end;
-    Dec(Remaining, ItemsInBatch);
-    Writer.WriteEndArray;
+      Dec(Remaining);
+      end;
+      Writer.WriteEndArray;
+    *)
+
     Writer.WriteBoolean('ordered', AOrdered);
     AddWriteConcern(Writer);
     Writer.WriteEndDocument;
-    Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+    Payload0 := Writer.ToBson;
+    bytesencoded:=length(payload0) +100; //overly generous estimation
+    Writer := nil;
+
+    { https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#command-arguments-as-payload
+      "Bulk writes SHOULD use Payload Type 1, and MUST do so when the batch contains more than one entry."
+      N.B.: This method is faster because the server can read the "documents" parameter as a
+      simple sequential stream of small documents.}
+
+    SetLength(Payload1, 1); // Send ONE sequence of Payload1 with multiple docs
+    Payload1[0].name := 'documents';
+    SetLength(Payload1[0].Docs, ItemsInBatch);
+    for I := 0 to ItemsInBatch - 1 do
+    begin
+      tb := ADocuments[index].ToBson;
+      { Avoid excessive message size or batch count}
+      if ((bytesencoded + length(tb)) > fprotocol.MaxMessageSizeBytes) then
+      begin
+        SetLength(Payload1[0].Docs, I);
+        Break;
+      end;
+      Inc(BytesEncoded, Length(tb));
+      Payload1[0].Docs[I] := tb;
+      Inc(index);
+      dec(Remaining);
+    end;//FOR
+
+    Reply := FProtocol.OpMsg(Payload0, Payload1);
     Inc(Result, HandleCommandReply(Reply));
-  end;
+  end; // While
   Assert(index = ACount);
 end;
 
