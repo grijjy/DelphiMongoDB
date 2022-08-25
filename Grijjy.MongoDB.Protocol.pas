@@ -810,7 +810,6 @@ begin
     Writer.WriteInt32('hello', 1);
     Writer.WriteString('$db', DB_ADMIN);
     Writer.WriteEndDocument;
-    // LEGACY OpQuery
     Reply := OpMsg(Writer.ToBson, nil);
     if Assigned(Reply) then
     begin
