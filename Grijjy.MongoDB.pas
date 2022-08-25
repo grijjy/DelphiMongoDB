@@ -196,6 +196,7 @@ type
   { Forward declarations }
   IgoMongoDatabase = interface;
   IgoMongoCollection = interface;
+  igoMongoCursor = interface;
   tWriteCmd = Reference to procedure(Writer: IgoBsonWriter);
 
   { The client interface to MongoDB.
@@ -226,7 +227,7 @@ type
     function IsMaster: Boolean;
 
     { Issue an admin command that is supposed to return ONE document }
-    function AdminCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+    function AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
     { Issue a logRotate command.
       https://www.mongodb.com/docs/manual/reference/command/logRotate/ }
     function LogRotate: Boolean;
@@ -322,8 +323,12 @@ type
     function GetDbStats(const AScale: Integer): TgoMongoStatistics;
 
     { Issue a command against the database that returns one document.
-      Similar to AdminCommandDoc. }
-    function DBCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+      Similar to AdminCommand. }
+    function AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
+
+    { Issue a command against the database that returns one document.
+      Similar to AdminCommand. }
+    function Command(CommandToIssue: tWriteCmd): igoMongoCursor;
 
     { The client used for this database. }
     property Client: IgoMongoClient read _GetClient;
@@ -334,7 +339,7 @@ type
 
   { Represents a cursor to the documents returned from one of the
     IgoMongoCollection.Find methods. }
-  IgoMongoCursor = interface
+  igoMongoCursor = interface
     ['{18813F27-1B41-453C-86FE-E98AFEB3D905}']
     { Allows for..in enumeration over all documents in the cursor. }
     function GetEnumerator: TEnumerator<TgoBsonDocument>;
@@ -465,13 +470,13 @@ type
       be empty if there are no documents that match the filter.
       Enumerating over the result may trigger additional calls to the MongoDB
       server. }
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): IgoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter): IgoMongoCursor; overload;
-    function Find(const AProjection: TgoMongoProjection): IgoMongoCursor; overload;
-    function Find: IgoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): IgoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
+    function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find: igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
-      const ANumberToSkip: Integer = 0): IgoMongoCursor; overload;
+      const ANumberToSkip: Integer = 0): igoMongoCursor; overload;
 
     { Finds the first document matching the filter.
 
@@ -627,7 +632,7 @@ type
     function GetDatabase(const AName: string): IgoMongoDatabase;
     function GetInstanceInfo(const ASaslSupportedMechs: string = ''; const AComment: string = ''): TgoMongoInstanceInfo;
     function IsMaster: Boolean;
-    function AdminCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+    function AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
     function LogRotate: Boolean;
     function BuildInfo: TgoBsonDocument;
     function HostInfo: TgoBsonDocument;
@@ -664,8 +669,7 @@ uses
 
 {$POINTERMATH ON}
 
-
-  { If no reply was received within timeout seconds, throw an exception }
+{ If no reply was received within timeout seconds, throw an exception }
 procedure HandleTimeout(const AReply: IgoMongoReply); inline;
 begin
   if (AReply = nil) then
@@ -758,7 +762,9 @@ type
       const ACollation: TgoMongoCollation): Boolean;
     function RenameCollection(const AFromNamespace, AToNamespace: string; const ADropTarget: Boolean = false): Boolean;
     function GetDbStats(const AScale: Integer): TgoMongoStatistics;
-    function DBCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+    function Command(CommandToIssue: tWriteCmd): igoMongoCursor;
+    function AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
+
   protected
     property Protocol: TgoMongoProtocol read FProtocol;
     property name: string read FName;
@@ -769,7 +775,7 @@ type
 
 type
   { Implements IgoMongoCursor }
-  TgoMongoCursor = class(TInterfacedObject, IgoMongoCursor)
+  TgoMongoCursor = class(TInterfacedObject, igoMongoCursor)
 {$REGION 'Internal Declarations'}
   private type
     TEnumerator = class(TEnumerator<TgoBsonDocument>)
@@ -811,23 +817,23 @@ type
 {$ENDREGION 'Internal Declarations'}
   end;
 
-
-function HasCursor (const ADoc: TgoBsonDocument; VAR Cursor:tgoBSONDocument; VAR CursorID: Int64; VAR Namespace:String):Boolean; Inline;
-var temp:tgoBSONValue;
+function HasCursor(const ADoc: TgoBsonDocument; var Cursor: TgoBsonDocument; var CursorID: Int64; var Namespace: string): Boolean; inline;
+var
+  temp: TgoBsonValue;
 begin
   Cursor.SetNil;
-  CursorID:=0;
-  Namespace:='';
-  Result:=(ADoc.TryGetValue('cursor', temp));
-  if result then
+  CursorID := 0;
+  Namespace := '';
+  Result := (ADoc.TryGetValue('cursor', temp));
+  if Result then
   begin
-     cursor:=temp.AsBsonDocument;
-     CursorID := Cursor['id']; // 0=cursor exhausted, else more data can be pulled
-     Namespace := Cursor.Get('ns', '').ToString(); // databasename.CollectionNameOrCommand
+    Cursor := temp.AsBsonDocument;
+    CursorID := Cursor['id']; // 0=cursor exhausted, else more data can be pulled
+    Namespace := Cursor.Get('ns', '').ToString(); // databasename.CollectionNameOrCommand
   end;
 end;
 
-function firstBatchToCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol): IgoMongoCursor;
+function firstBatchToCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol): igoMongoCursor;
 var
   Cursor: TgoBsonDocument;
   Value: TgoBsonValue;
@@ -836,12 +842,12 @@ var
   Namespace: string;
   Docs: TgoBsonArray;
   InitialPage: TArray<TBytes>;
-  icursor: IgoMongoCursor;
+  icursor: igoMongoCursor;
 begin
   Result := nil;
   if not ADoc.IsNil then
   begin
-    if HasCursor(ADoc,Cursor,CursorID,Namespace) then
+    if HasCursor(ADoc, Cursor, CursorID, Namespace) then
     begin
       if (Cursor.TryGetValue('firstBatch', Value)) then
       begin
@@ -852,11 +858,18 @@ begin
         icursor := TgoMongoCursor.Create(AProtocol, Namespace, InitialPage, CursorID);
         Result := icursor;
       end;
+    end
+    else  //Just return a cursor with this one document
+    begin
+      SetLength(InitialPage, 1);
+      InitialPage[0] := ADoc.ToBson;
+      icursor := TgoMongoCursor.Create(AProtocol, 'null.null', InitialPage, 0);
+      Result := icursor;
     end;
   end;
 end;
 
-function ExhaustCursor(const aCursor: IgoMongoCursor): TArray<TgoBsonDocument>;
+function ExhaustCursor(const aCursor: igoMongoCursor): TArray<TgoBsonDocument>;
 begin
   Result := nil;
   if assigned(aCursor) then
@@ -896,13 +909,13 @@ type
     function UpdateMany(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
       const AOrdered: Boolean = True): Integer;
 
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): IgoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter): IgoMongoCursor; overload;
-    function Find(const AProjection: TgoMongoProjection): IgoMongoCursor; overload;
-    function Find: IgoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): IgoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
+    function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find: igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
-      const ANumberToSkip: Integer = 0): IgoMongoCursor; overload;
+      const ANumberToSkip: Integer = 0): igoMongoCursor; overload;
     function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
@@ -1118,7 +1131,8 @@ end;
 { This method performs an administrative command and returns ONE document.
   It uses dependency injection by calling an anonymous method that "injects"
   commands into the BSON document }
-function TgoMongoClient.AdminCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+
+function TgoMongoClient.AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
@@ -1130,57 +1144,73 @@ begin
   Writer.WriteEndDocument;
   Reply := Protocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := Reply.FirstDoc;
+  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol);
 end;
 
 function TgoMongoClient.BuildInfo: TgoBsonDocument;
+var
+  Doc: TgoBsonDocument;
 begin
-  Result := AdminCommandDoc(
+  Result.SetNil;
+  for Doc in AdminCommand(
     procedure(Writer: IgoBsonWriter)
     begin
       Writer.WriteInt32('buildInfo', 1);
-    end);
+    end) do
+    Result := Doc;
 end;
 
 function TgoMongoClient.Features: TgoBsonDocument;
+var
+  Doc: TgoBsonDocument;
 begin
-  Result := AdminCommandDoc(
+  Result.SetNil;
+  for Doc in AdminCommand(
     procedure(Writer: IgoBsonWriter)
     begin
       Writer.WriteInt32('features', 1);
-    end);
+    end) do
+    Result := Doc;
 end;
 
 function TgoMongoClient.Hello: TgoBsonDocument;
+var
+  Doc: TgoBsonDocument;
 begin
-  Result := AdminCommandDoc(
+  Result.SetNil;
+  for Doc in AdminCommand(
     procedure(Writer: IgoBsonWriter)
     begin
       Writer.WriteInt32('hello', 1);
-    end);
+    end) do
+    Result := Doc;
 end;
 
 function TgoMongoClient.HostInfo: TgoBsonDocument;
+var
+  Doc: TgoBsonDocument;
 begin
-  Result := AdminCommandDoc(
+  Result.SetNil;
+  for Doc in AdminCommand(
     procedure(Writer: IgoBsonWriter)
     begin
       Writer.WriteInt32('hostInfo', 1);
-    end);
+    end) do
+    Result := Doc;
 end;
 
 function TgoMongoClient.LogRotate: Boolean;
 var
-  Answer: TgoBsonDocument;
+  Doc: TgoBsonDocument;
 begin
   Result := false;
-  Answer := AdminCommandDoc(
+  for Doc in AdminCommand(
     procedure(Writer: IgoBsonWriter)
     begin
       Writer.WriteInt32('logRotate', 1);
-    end);
-  if not Answer.IsNil then
-    Result := Answer['ok']
+    end) do
+    if not Doc.IsNil then
+      Result := Doc['ok']
 end;
 
 { TgoMongoDatabase }
@@ -1201,7 +1231,12 @@ begin
   Assert(FProtocol <> nil);
 end;
 
-function TgoMongoDatabase.DBCommandDoc(CommandToIssue: tWriteCmd): TgoBsonDocument;
+function TgoMongoDatabase.AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
+begin
+  Result := FClient.AdminCommand(CommandToIssue);
+end;
+
+function TgoMongoDatabase.Command(CommandToIssue: tWriteCmd): igoMongoCursor;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
@@ -1213,7 +1248,7 @@ begin
   Writer.WriteEndDocument;
   Reply := Protocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := Reply.FirstDoc;
+  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol);
 end;
 
 procedure TgoMongoDatabase.DropCollection(const AName: string);
@@ -1665,13 +1700,16 @@ end;
 
 function TgoMongoCollection.Stats: TgoBsonDocument;
 // https://www.mongodb.com/docs/manual/reference/command/collStats/
-
+var
+  Doc: TgoBsonDocument;
 begin
-  Result := FDatabase.DBCommandDoc(
+  Doc.SetNil;
+  for Doc in FDatabase.Command(
     procedure(Writer: IgoBsonWriter)
     begin
       Writer.WriteString('collStats', FName);
-    end);
+    end) do;
+  Result := Doc;
 end;
 
 function TgoMongoCollection.ListIndexes: TArray<TgoBsonDocument>;
@@ -1724,7 +1762,7 @@ begin
   Result := (Delete(AFilter, True, 1) = 1);
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter): IgoMongoCursor;
+function TgoMongoCollection.Find(const AFilter: TgoMongoFilter): igoMongoCursor;
 var
   Projection: TgoMongoProjection; // record
   Sort: TgoMongoSort; // record
@@ -1734,7 +1772,7 @@ begin
   Result := Find(AFilter, Projection, Sort);
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): IgoMongoCursor;
+function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor;
 var
   Sort: TgoMongoSort; // record
 begin
@@ -1742,7 +1780,7 @@ begin
   Result := Find(AFilter, AProjection, Sort);
 end;
 
-function TgoMongoCollection.Find: IgoMongoCursor;
+function TgoMongoCollection.Find: igoMongoCursor;
 var
   Projection: TgoMongoProjection; // record
   Sort: TgoMongoSort; // record
@@ -1754,7 +1792,7 @@ begin
   Result := Find(Filter, Projection, Sort);
 end;
 
-function TgoMongoCollection.Find(const AProjection: TgoMongoProjection): IgoMongoCursor;
+function TgoMongoCollection.Find(const AProjection: TgoMongoProjection): igoMongoCursor;
 var
   Sort: TgoMongoSort;
   Filter: TgoMongoFilter;
@@ -1764,7 +1802,7 @@ begin
   Result := Find(Filter, AProjection, Sort);
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): IgoMongoCursor;
+function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor;
 var
   Projection: TgoMongoProjection;
 begin
@@ -1774,7 +1812,7 @@ end;
 
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
 function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
-const ANumberToSkip: Integer = 0): IgoMongoCursor;
+const ANumberToSkip: Integer = 0): igoMongoCursor;
 var
   Reply: IgoMongoReply;
   Writer: IgoBsonWriter;
@@ -1923,7 +1961,7 @@ begin
   BytesEncoded := 0;
   while (Remaining > 0) do
   begin
-    ItemsInBatch := Min(Remaining, fprotocol.MaxWriteBatchSize);
+    ItemsInBatch := Min(Remaining, FProtocol.MaxWriteBatchSize);
     SetLength(Payload1, 0);
     Writer := TgoBsonWriter.Create;
     Writer.WriteStartDocument;
@@ -1949,13 +1987,13 @@ begin
     AddWriteConcern(Writer);
     Writer.WriteEndDocument;
     Payload0 := Writer.ToBson;
-    bytesencoded:=length(payload0) +100; //overly generous estimation
+    BytesEncoded := Length(Payload0) + 100; // overly generous estimation
     Writer := nil;
 
     { https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#command-arguments-as-payload
       "Bulk writes SHOULD use Payload Type 1, and MUST do so when the batch contains more than one entry."
       N.B.: This method is faster because the server can read the "documents" parameter as a
-      simple sequential stream of small documents.}
+      simple sequential stream of small documents. }
 
     SetLength(Payload1, 1); // Send ONE sequence of Payload1 with multiple docs
     Payload1[0].name := 'documents';
@@ -1963,8 +2001,8 @@ begin
     for I := 0 to ItemsInBatch - 1 do
     begin
       tb := ADocuments[index].ToBson;
-      { Avoid excessive message size or batch count}
-      if ((bytesencoded + length(tb)) > fprotocol.MaxMessageSizeBytes) then
+      { Avoid excessive message size or batch count }
+      if ((BytesEncoded + Length(tb)) > FProtocol.MaxMessageSizeBytes) then
       begin
         SetLength(Payload1[0].Docs, I);
         Break;
@@ -1973,7 +2011,7 @@ begin
       Payload1[0].Docs[I] := tb;
       Inc(index);
       dec(Remaining);
-    end;//FOR
+    end; // FOR
 
     Reply := FProtocol.OpMsg(Payload0, Payload1);
     Inc(Result, HandleCommandReply(Reply));
