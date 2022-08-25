@@ -3,10 +3,12 @@ unit Grijjy.MongoDB.Protocol;
   This unit is only used internally. }
 
 {$INCLUDE 'Grijjy.inc'}
+{$B-}
 
 interface
 
 uses
+  System.Math,
   System.SyncObjs,
   System.SysUtils,
   System.Generics.Collections,
@@ -74,8 +76,8 @@ type
 
   { Flags for new OP_MSG protocol }
 
-  TGoMongoMsgFlag = (msgfChecksumPresent, msgfMoreToCome, msgfExhaustAllowed = 16);
-  TgoMongoMsgFlags = set of TGoMongoMsgFlag;
+  TGoMongoMsgFlag = (msgfChecksumPresent, msgfMoreToCome, msgfExhaustAllowed = 16, msgfPadding = 31); // padded to ensure the SET is 32 bits
+  TgoMongoMsgFlags = set of TGoMongoMsgFlag; // is 4 bytes in size
 
 type
   { Payload type 1 for OP_MSG }
@@ -172,6 +174,8 @@ type
     FAuthErrorCode: Integer;
     FMinWireVersion: Integer;
     FMaxWireVersion: Integer;
+    FMaxWriteBatchSize: Integer;
+    FMaxMessageSizeBytes: Integer;
   private
     procedure Send(const AData: TBytes);
     procedure Recover;
@@ -198,6 +202,7 @@ type
     procedure SocketRecv(const ABuffer: Pointer; const ASize: Integer);
     procedure InitialHandshake;
     procedure RemoveReply(const ARequestId: Integer);
+    procedure UpdateReplyTimeout(const ARequestId: Integer);
   public
     class constructor Create;
     class destructor Destroy;
@@ -225,16 +230,23 @@ type
     property AuthErrorCode: Integer read FAuthErrorCode;
     property MinWireVersion: Integer read FMinWireVersion;
     property MaxWireVersion: Integer read FMaxWireVersion;
+    property MaxWriteBatchSize: Integer read FMaxWriteBatchSize write FMaxWriteBatchSize;
+    property MaxMessageSizeBytes: Integer read FMaxMessageSizeBytes write FMaxMessageSizeBytes;
+
   end;
 
 resourcestring
   RS_MONGODB_AUTHENTICATION_ERROR = 'Error authenticating [%d] %s';
 
+const
+  { Maximum number of documents that can be written in bulk at once }
+  DEF_MAX_BULK_SIZE = 1000;
+  DEF_MAX_MSG_SIZE = 32 * 1024 * 1024;
+
 implementation
 
 uses
   System.DateUtils,
-
   Grijjy.Bson.IO,
   Grijjy.Scram;
 
@@ -256,7 +268,7 @@ type
   end;
 
   POpMsgHeader = ^TOPMSGHeader;
-
+  tCRC32 = Cardinal;
   tgoPayloadDecodeResult = (pdEOF, pdInvalidPayload, pdOK);
 
   tMsgPayload = class
@@ -267,7 +279,7 @@ type
       var Name: string; var data: TArray<TBytes>): tgoPayloadDecodeResult;
   end;
 
-  tgoReplyValidationResult = (rvrNoHeader, rvrInvalidHeader, rvrIncomplete, rvrChecksumInvalid, rvrDataError, rvrOK);
+  tgoReplyValidationResult = (rvrOK, rvrNoHeader, rvrOpcodeInvalid, rvrGrowing, rvrChecksumInvalid, rvrDataError);
 
   { Implements IgoMongoReply - it is an OP_MSG sent by the server to the client. }
   TgoMongoMsgReply = class(TInterfacedObject, IgoMongoReply)
@@ -302,7 +314,7 @@ begin
   buffer.Append(PayloadType); // type comes before before "size" marker
   MarkPos := buffer.Size; // Position of the "size" marker in the stream
   SomeInteger := 0; // placeholder for Size
-  buffer.Append(SomeInteger);
+  buffer.AppendBuffer(SomeInteger, sizeof(Integer));
   Cstring := utf8string(name);
   buffer.AppendBuffer(Cstring[low(utf8string)], length(Cstring) + 1); // string plus #0
   if Assigned(Docs) then
@@ -310,7 +322,7 @@ begin
       if Assigned(Docs[I]) then
         buffer.Append(Docs[I]);
   pSize := @buffer.buffer[MarkPos];
-  pSize^ := buffer.Size - MarkPos;
+  pSize^ := buffer.Size - MarkPos; //number of bytes written after "markpos"
 end;
 
 { TgoMongoProtocol }
@@ -484,6 +496,7 @@ var
   var
     Start: TDateTime;
   begin
+    { TODO : This could cause problems on leap days. Better use UTC }
     Start := Now;
     while (MillisecondsBetween(Now, Start) < FSettings.ConnectionTimeout) and (FConnection.State <> TgoConnectionState.Connected) do
       Sleep(5);
@@ -573,6 +586,8 @@ begin
   inherited Create;
   FHost := AHost;
   FPort := APort;
+  FMaxWriteBatchSize := DEF_MAX_BULK_SIZE;
+  FMaxMessageSizeBytes := DEF_MAX_MSG_SIZE; // 2 x maximum message size of 16 mb
   FSettings := ASettings;
   FConnectionLock := TCriticalSection.Create;
   FRepliesLock := TCriticalSection.Create;
@@ -646,6 +661,11 @@ begin
     end;
   end;
 end;
+
+{ https://github.com/mongodb/specifications/blob/master/source/message/OP_MSG.rst#command-arguments-as-payload
+  Any unknown Payload Types MUST result in an error and the socket MUST be closed.
+  !!! There is no ordering implied by payload types.!!!
+  !!! A section with payload type 1 can be serialized before payload type 0!!! }
 
 class function tMsgPayload.DecodeSequence(TestMode: Boolean; SeqStart: Pointer; SizeAvail: Integer; var SizeRead: Integer;
   var PayloadType: Byte; var Name: string; var data: TArray<TBytes>): tgoPayloadDecodeResult;
@@ -722,10 +742,13 @@ begin
   Cstring := '';
   PayloadSize := 0;
 
-  if BufLeft >= (1 + EmptyDocSize) then // minimum size is 1 byte (payloadtype) + empty bson doc
+  // minimum size for decoding is 6 Bytes (payloadtype + empty bson doc). When we reach the end of the message
+  // there may be a CRC which is only 4 bytes. Decoding stops there.
+
+  if BufLeft >= (1 + EmptyDocSize) then
   begin
     read(PayloadType, 1);
-    PayloadStart := offs; // to count how many bytes were processed from THIS point
+    PayloadStart := offs; // to facilitate function "PayloadLeft"
     if (PayloadType in [0, 1]) then
     begin
       peek(PayloadSize, sizeof(PayloadSize)); // Peek the payload size counter
@@ -743,9 +766,10 @@ begin
               while PayloadLeft > 0 do
               begin
                 read(c, 1);
-                if c <> #0 then
+                if c = #0 then
                   break;
-                Cstring := Cstring + c;
+                SetLength(Cstring, length(Cstring) + 1); // avoid conversion to "string"
+                Cstring[length(Cstring)] := c;
               end; // while
               name := string(Cstring);
 
@@ -759,7 +783,7 @@ begin
               end; // while
             end; // case 1
 
-        else   //unknown type
+        else // unknown type
           result := tgoPayloadDecodeResult.pdInvalidPayload;
         end; // case
       end; // if
@@ -775,9 +799,7 @@ var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
   Doc: TgoBsonDocument;
-  Databases: TgoBsonArray;
-  Value: TgoBsonValue;
-  I: Integer;
+
 begin
   FMaxWireVersion := 1;
   try
@@ -797,6 +819,8 @@ begin
       begin
         FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
         FMinWireVersion := Doc['minWireVersion'].AsInteger;
+        MaxWriteBatchSize := MAX(Doc['maxWriteBatchSize'].AsInteger, DEF_MAX_BULK_SIZE);
+        MaxMessageSizeBytes := MAX(Doc['maxMessageSizeBytes'].AsInteger, DEF_MAX_MSG_SIZE);
       end;
     end;
   except
@@ -830,6 +854,7 @@ var
   I: Integer;
   T: TBytes;
   paramtype: Byte;
+  // validation:tgoReplyValidationResult;
 begin
   if length(ParamType0) = 0 then
     raise EgoMongoDBError.Create('Mandatory document of PayloadType 0 missing in OpMsg');
@@ -865,9 +890,10 @@ begin
     // update message length in header
     pHeader := @data.buffer[0];
     pHeader.Header.MessageLength := data.Size;
-    Send(data.ToBytes);
+    T := data.ToBytes;
+    Send(T);
   finally
-    data.Free;
+    FreeAndNil(data);
   end;
 
   if not NoResponse then
@@ -885,7 +911,10 @@ function TgoMongoProtocol.HaveReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: I
 begin
   result := (Size >= sizeof(TMsgHeader));
   if (result) then
+  begin
     move(tb[0], AMsgHeader, sizeof(TMsgHeader));
+    result := TMsgHeader(AMsgHeader).ValidOpcode;
+  end;
 end;
 
 procedure TgoMongoProtocol.Send(const AData: TBytes);
@@ -932,17 +961,20 @@ var
   _Now, _Init, LastRecv: TDateTime;
 begin
   result := nil;
+
   _Init := Now;
   while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, result)) do
   begin
     _Now := Now;
     if LastPartialReply(ARequestId, LastRecv) then
     begin
+      { TODO : This could cause problems on leap days. Better use UTC }
       // give reply some time to become complete
       if (MillisecondsBetween(_Now, LastRecv) > FSettings.ReplyTimeout) then
         break;
     end
     else // reply is nowhere to be found
+      { TODO : This could cause problems on leap days. Better use UTC }
       if MillisecondsBetween(_Now, _Init) > FSettings.ReplyTimeout then
         break;
     Sleep(5);
@@ -959,9 +991,7 @@ end;
 
 procedure TgoMongoProtocol.Recover;
 var
-  Index: Integer;
   MsgHeader: TMsgHeader;
-  NewFormat: Boolean;
 begin
   { remove trash from the reception buffer }
   FRecvBufferLock.Enter;
@@ -970,10 +1000,7 @@ begin
     begin
       // if it begins with a valid response header, remove its statistics
       if HaveReplyMsgHeader(MsgHeader) then
-      begin
-        if MsgHeader.ValidOpcode then
-          RemoveReply(MsgHeader.RequestID);
-      end;
+        RemoveReply(MsgHeader.RequestID);
       // Now clear the buffer
       FRecvSize := 0;
     end;
@@ -987,7 +1014,6 @@ var
   MongoReply: IgoMongoReply;
   MessageSize: Integer;
   MsgHeader: TMsgHeader;
-  NewFormat: Boolean;
 begin
   FRecvBufferLock.Enter;
   try
@@ -1003,6 +1029,7 @@ begin
     while True do
     begin
       case TgoMongoMsgReply.ValidateMessage(FRecvBuffer, FRecvSize, MessageSize) of
+
         tgoReplyValidationResult.rvrOK:
           begin
             MongoReply := TgoMongoMsgReply.Create(FRecvBuffer, MessageSize);
@@ -1010,40 +1037,60 @@ begin
             try
               { Remove the partial reply timestamp }
               FPartialReplies.Remove(MongoReply.ResponseTo);
-
               { Add the completed reply to the dictionary }
               FCompletedReplies.Add(MongoReply.ResponseTo, MongoReply);
             finally
               FRepliesLock.Release;
             end;
 
-            { remove the processed bytes, if needed }
+            { remove the processed bytes from the buffer }
             if (MessageSize = FRecvSize) then
               FRecvSize := 0
             else
               move(FRecvBuffer[MessageSize], FRecvBuffer[0], FRecvSize - MessageSize);
           end;
 
-        tgoReplyValidationResult.rvrIncomplete: // header opcode is valid but message still incomplete
+        tgoReplyValidationResult.rvrGrowing:
           begin
-            { Update the partial reply timestamp }
-            if HaveReplyMsgHeader(MsgHeader) and MsgHeader.ValidOpcode then
-            begin
-              FRepliesLock.Acquire;
-              try
-                FPartialReplies.AddOrSetValue(MsgHeader.ResponseTo, Now);
-              finally
-                FRepliesLock.Release;
-              end;
-            end;
+            // header opcode is valid but message still growing/incomplete
+            // Update the partial reply timestamp
+            if HaveReplyMsgHeader(MsgHeader) then
+              UpdateReplyTimeout(MsgHeader.ResponseTo);
             break;
           end;
+
+        tgoReplyValidationResult.rvrOpcodeInvalid:
+          begin
+            // whatever is at the start of the buffer is not a valid header, discard everything
+            FRecvSize := 0; // discard everything
+            break;
+          end;
+
+        tgoReplyValidationResult.rvrDataError, tgoReplyValidationResult.rvrChecksumInvalid:
+          begin
+            // There seems to be a valid header and there are enough bytes in the buffer, but the parser or checksum failed
+            if HaveReplyMsgHeader(MsgHeader) then
+              RemoveReply(MsgHeader.ResponseTo);
+            FRecvSize := 0; // discard everything
+            break;
+          end
       else
         break;
       end; // case
     end;
   finally
     FRecvBufferLock.Leave;
+  end;
+end;
+
+procedure TgoMongoProtocol.UpdateReplyTimeout(const ARequestId: Integer);
+begin
+  FRepliesLock.Acquire;
+  try
+    { TODO : This could cause problems on leap days. Better use UTC }
+    FPartialReplies.AddOrSetValue(ARequestId, Now);
+  finally
+    FRepliesLock.Release;
   end;
 end;
 
@@ -1066,11 +1113,10 @@ end;
 
 { TgoMongoMsgReply }
 
-// Read data from a verified valid data buffer
+// Read data from a previously validated data buffer
 procedure TgoMongoMsgReply.ReadData(const ABuffer: TBytes; const ASize: Integer);
 var
-  I, j, Index, Count, k: Integer;
-  Size: Int32;
+  I, k: Integer;
   DocBuf: TArray<TBytes>;
   data: Pointer;
   StartOfData, Avail, SizeRead, NewSize: Integer;
@@ -1110,79 +1156,93 @@ begin
   end;
 end;
 
-class function TgoMongoMsgReply.ValidateMessage(const ABuffer: TBytes; const ASize: Integer; var aSizeRead: Integer): tgoReplyValidationResult;
+// Validate a message in OP_MSG format
+class function TgoMongoMsgReply.ValidateMessage(const ABuffer: TBytes; const ASize: Integer; var aSizeRead: Integer)
+  : tgoReplyValidationResult;
 var
-  I, j, Index, Count, k: Integer;
-  Size: Int32;
   DocBuf: TArray<TBytes>;
   data: Pointer;
-  StartOfData, Avail, NewSize: Integer;
+  StartOfData, Avail: Integer;
   PayloadType: Byte;
   seqname: string;
-  aHeader: POpMsgHeader;
+  pHeader: POpMsgHeader;
   SizeRead, Type0Docs: Integer;
-  AllBytesRead: Boolean;
+  AllBytesRead, HasChecksum: Boolean;
+
+  function ChecksumOK: Boolean;
+  begin
+    { TODO : Implement checksum check, there's a tCRC32 at the end of the message }
+    result := True;
+  end;
+
 begin
-  result := tgoReplyValidationResult.rvrNoHeader;
+  result := tgoReplyValidationResult.rvrNoHeader; // Buffer does not contain enough bytes for a header
+  SizeRead := 0;
+  Type0Docs := 0;
   try
-    SizeRead := 0;
-    Type0Docs := 0;
     if (ASize >= sizeof(TOPMSGHeader)) then
     begin
-      aHeader := @ABuffer[0];
-      if aHeader.Header.ValidOpcode then
+      pHeader := @ABuffer[0];
+      if pHeader.Header.ValidOpcode then
       begin
-        if ASize >= aHeader.Header.MessageLength then
+        if ASize >= pHeader.Header.MessageLength then
         begin
           StartOfData := sizeof(TOPMSGHeader);
           aSizeRead := StartOfData;
           data := @ABuffer[StartOfData];
-          Avail := aHeader.Header.MessageLength - StartOfData;
+          Avail := pHeader.Header.MessageLength - StartOfData;
+          HasChecksum := TGoMongoMsgFlag.msgfChecksumPresent in pHeader.flagbits;
 
-          repeat
-            case tMsgPayload.DecodeSequence(True, data, Avail, SizeRead, PayloadType, seqname, DocBuf) of
-              tgoPayloadDecodeResult.pdOK:
-                begin
-                  if PayloadType = 0 then
-                    inc(Type0Docs);
-                  Avail := Avail - SizeRead;
-                  inc(intptr(data), SizeRead);
-                  inc(aSizeRead, SizeRead);
-                end;
-
-              tgoPayloadDecodeResult.pdEOF:
-                break;
-
-              tgoPayloadDecodeResult.pdInvalidPayload:
-                Exit(tgoReplyValidationResult.rvrDataError);
-            end; // Case
-          until False;
-
-          // packet MUST have ONE document of payload type 0
-          if Type0Docs <> 1 then
-            Exit(tgoReplyValidationResult.rvrDataError);
-
-          // Does amount of data parsed match the message length of the header ?
-          if (TGoMongoMsgFlag.msgfChecksumPresent in aHeader.flagbits) then
+          if (not HasChecksum) or ChecksumOK() then // needs compiler switch $B-
           begin
-            AllBytesRead := (aSizeRead = aHeader.Header.MessageLength - sizeof(Int32));
-            if AllBytesRead then
-              inc(aSizeRead, sizeof(Int32)); // jump over checksum
-          end
-          else
-            AllBytesRead := (aSizeRead = aHeader.Header.MessageLength);
+            repeat
+              case tMsgPayload.DecodeSequence(True, data, Avail, SizeRead, PayloadType, seqname, DocBuf) of
+                tgoPayloadDecodeResult.pdOK:
+                  begin
+                    if PayloadType = 0 then
+                      inc(Type0Docs);
+                    Avail := Avail - SizeRead;
+                    inc(intptr(data), SizeRead);
+                    inc(aSizeRead, SizeRead);
+                  end;
 
-          if AllBytesRead then
-            result := tgoReplyValidationResult.rvrOK
+                tgoPayloadDecodeResult.pdEOF:
+                  break;
+
+                tgoPayloadDecodeResult.pdInvalidPayload:
+                  Exit(tgoReplyValidationResult.rvrDataError);
+              end; // Case
+            until False;
+
+            // packet MUST have ONE document of payload type 0
+            if Type0Docs <> 1 then
+              Exit(tgoReplyValidationResult.rvrDataError);
+
+            // Does amount of data parsed match the message length of the header ?
+            if (HasChecksum) then
+            begin
+              AllBytesRead := (aSizeRead = pHeader.Header.MessageLength - sizeof(tCRC32));
+              if AllBytesRead then
+                inc(aSizeRead, sizeof(tCRC32)); // jump over checksum
+            end // if checksum
+            else
+              AllBytesRead := (aSizeRead = pHeader.Header.MessageLength);
+            if AllBytesRead then
+              result := tgoReplyValidationResult.rvrOK // Message decodes OK. All is well.
+            else
+              result := tgoReplyValidationResult.rvrDataError; // Header opcode OK, message could be complete, decoding fails
+          end // if checksum OK
           else
-            result := tgoReplyValidationResult.rvrDataError;
-        end // if valid opcode
+            result := tgoReplyValidationResult.rvrChecksumInvalid; // Header opcode OK, message could be complete, CRC fails
+        end // if aSize big enough for data
         else
-          result := tgoReplyValidationResult.rvrInvalidHeader;
-      end
-    end // if enough bytes received for the data
+          result := tgoReplyValidationResult.rvrGrowing; // Header opcode OK, but message not complete (yet)
+      end // if valid opcode
+      else
+        result := tgoReplyValidationResult.rvrOpcodeInvalid; // Enough bytes for a header, but opcode invalid
+    end // if enough bytes for a header
     else
-      result := tgoReplyValidationResult.rvrIncomplete;
+      result := tgoReplyValidationResult.rvrNoHeader; // Buffer does not contain enough bytes for a header
   except
     // no exceptions allowed to exit
   end;
