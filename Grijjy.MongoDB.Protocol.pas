@@ -35,6 +35,8 @@ type
   { Is raised when a connection error (or timeout) occurs. }
   EgoMongoDBConnectionError = class(EgoMongoDBError);
 
+  tgoMongoReadPreference = (primary = 0, primaryPreferred , secondary , secondaryPreferred , nearest );
+
   { Query flags as used by TgoMongoProtocol.OpQuery }
   TgoMongoQueryFlag = ( // OBSOLETE
     { Tailable means cursor is not closed when the last data is retrieved.
@@ -122,6 +124,8 @@ type
 
     { Default query flags }
     QueryFlags: TgoMongoQueryFlags; // OBSOLETE
+
+    GlobalReadPreference: tgoMongoReadPreference;
 
     { Tls enabled }
     Secure: Boolean;
@@ -232,7 +236,7 @@ type
     property MaxWireVersion: Integer read FMaxWireVersion;
     property MaxWriteBatchSize: Integer read FMaxWriteBatchSize write FMaxWriteBatchSize;
     property MaxMessageSizeBytes: Integer read FMaxMessageSizeBytes write FMaxMessageSizeBytes;
-
+    property GlobalReadPreference: tgoMongoReadPreference read FSettings.GlobalReadPreference write FSettings.GlobalReadPreference;
   end;
 
 resourcestring
@@ -269,12 +273,22 @@ type
 
   POpMsgHeader = ^TOPMSGHeader;
   tCRC32 = Cardinal;
-  tgoPayloadDecodeResult = (pdEOF, pdInvalidPayload, pdOK);
+  tgoPayloadDecodeResult = (pdEOF, pdInvalidPayloadType, pdBufferOverrun, pdOK);
 
   tMsgPayload = class
   const
     EmptyDocSize = 5;
-    class function ReadBsonDoc(TestMode: Boolean; out Bson: TBytes; buffer: Pointer; BytesAvail: Integer; var BytesRead: Integer): Boolean;
+    MinSequenceSize = 1 + EmptyDocSize;
+
+    // Try to read a BSON document from a buffer. if successful, update "Bytesread".
+    // The BSON document itself is not validated.
+    // If testmode=true, it is a testrun only, the returned array is empty.
+    class function ReadBsonDoc(TestMode: Boolean; out Bson: TBytes; buffer: Pointer; BytesAvail: Integer; var BytesRead: Integer)
+      : tgoPayloadDecodeResult;
+
+    // Try to read a TYPE 0 or Type1 payload from a buffer. If successful, update "Bytesread".
+    // The BSON documents themselves are not validated.
+    // If testmode=true, it is a testrun only, the returned array is empty.
     class function DecodeSequence(TestMode: Boolean; SeqStart: Pointer; SizeAvail: Integer; var SizeRead: Integer; var PayloadType: Byte;
       var Name: string; var data: TArray<TBytes>): tgoPayloadDecodeResult;
   end;
@@ -322,7 +336,7 @@ begin
       if Assigned(Docs[I]) then
         buffer.Append(Docs[I]);
   pSize := @buffer.buffer[MarkPos];
-  pSize^ := buffer.Size - MarkPos; //number of bytes written after "markpos"
+  pSize^ := buffer.Size - MarkPos; // number of bytes written after "markpos"
 end;
 
 { TgoMongoProtocol }
@@ -638,26 +652,30 @@ begin
   inherited;
 end;
 
-class function tMsgPayload.ReadBsonDoc(TestMode: Boolean; out Bson: TBytes; buffer: Pointer; BytesAvail: Integer;
-  var BytesRead: Integer): Boolean;
+class function tMsgPayload.ReadBsonDoc(TestMode: Boolean; out Bson: TBytes; buffer: Pointer; BytesAvail: Integer; var BytesRead: Integer)
+  : tgoPayloadDecodeResult;
 var
   DocSize: Integer;
 begin
   BytesRead := 0;
   SetLength(Bson, 0);
-  result := False;
+  result := tgoPayloadDecodeResult.pdEOF; // Assume not enough bytes for minimal bson document
   if BytesAvail >= EmptyDocSize then
   begin
-    move(buffer^, DocSize, sizeof(Integer)); // read integer into "BytesRead"
+    move(buffer^, DocSize, sizeof(Integer)); // read size of bson document (includes docsize itself)
     if (BytesAvail >= DocSize) and (DocSize >= EmptyDocSize) then // buffer is big enough?
     begin
-      result := True; // OK
+      result := tgoPayloadDecodeResult.pdOK; // OK
       BytesRead := DocSize;
       if not TestMode then
       begin
         SetLength(Bson, DocSize);
         move(buffer^, Bson[0], DocSize);
       end;
+    end
+    else // we'd read beyond the end of the buffer, or docsize is invalid
+    begin
+      result := tgoPayloadDecodeResult.pdBufferOverrun;
     end;
   end;
 end;
@@ -682,6 +700,7 @@ var
   PayloadSize, offs, PayloadStart: Integer;
   c: ansichar;
   Cstring: utf8string;
+  tempresult: tgoPayloadDecodeResult;
 
   function cursor: Pointer;
   begin
@@ -716,18 +735,18 @@ var
     result := PayloadSize - PayloadProcessed;
   end;
 
-  function AppendDoc(var AData: TArray<TBytes>): Boolean;
+  function AppendDoc(): tgoPayloadDecodeResult;
   var
     tb: TBytes;
     bRead: Integer;
   begin
     result := ReadBsonDoc(TestMode, tb, cursor, PayloadLeft, bRead);
-    if result then
+    if result = tgoPayloadDecodeResult.pdOK then
     begin
       if not TestMode then
       begin
-        SetLength(AData, length(AData) + 1);
-        AData[high(AData)] := tb;
+        SetLength(data, length(data) + 1);
+        data[high(data)] := tb;
       end;
       inc(offs, bRead); // acknowledge read
     end;
@@ -745,30 +764,32 @@ begin
   // minimum size for decoding is 6 Bytes (payloadtype + empty bson doc). When we reach the end of the message
   // there may be a CRC which is only 4 bytes. Decoding stops there.
 
-  if BufLeft >= (1 + EmptyDocSize) then
+  if BufLeft >= MinSequenceSize then
   begin
-    read(PayloadType, 1);
+    read(PayloadType, 1); // Read the payload type
     PayloadStart := offs; // to facilitate function "PayloadLeft"
-    if (PayloadType in [0, 1]) then
+
+    if (PayloadType in [0, 1]) then // disallow other payload types
     begin
       peek(PayloadSize, sizeof(PayloadSize)); // Peek the payload size counter
-      if (BufLeft >= PayloadSize) and (PayloadSize >= 0) then // Plausibility check
+
+      if (BufLeft >= PayloadSize) and (PayloadSize >= 0) then // Avoid buffer overrun
       begin
         case PayloadType of
-          0: // Type 0: pull in ONE BSON doc
-            if AppendDoc(data) then
-              result := tgoPayloadDecodeResult.pdOK;
 
-          1: // Type 1: payload with string header, having [zero or more] BSON docs
+          0: // Type 0: contains ONE BSON doc
+            result := AppendDoc();
+
+          1: // Type 1: payload with string header, then zero or more BSON docs
             begin
               inc(offs, sizeof(Integer)); // jump over payload size
-              // Read string header
+              // Read string header - probably just ascii, but allow utf8 anyway
               while PayloadLeft > 0 do
               begin
                 read(c, 1);
                 if c = #0 then
                   break;
-                SetLength(Cstring, length(Cstring) + 1); // avoid conversion to "string"
+                SetLength(Cstring, length(Cstring) + 1); // dumb append of byte
                 Cstring[length(Cstring)] := c;
               end; // while
               name := string(Cstring);
@@ -778,16 +799,29 @@ begin
               // pull in as many docs as possible
               while PayloadLeft > 0 do
               begin
-                if not AppendDoc(data) then
+                tempresult := AppendDoc();
+                case tempresult of
+                  tgoPayloadDecodeResult.pdOK:
+                    Continue; // OK, potentially more documents
+                  tgoPayloadDecodeResult.pdEOF:
+                    break; // no more documents, ready
+                  tgoPayloadDecodeResult.pdBufferOverrun: // Error
+                    begin
+                      result := tempresult; // invalidate whole result
+                      break;
+                    end;
+                else // can't occur
                   break;
+                end;
               end; // while
             end; // case 1
-
-        else // unknown type
-          result := tgoPayloadDecodeResult.pdInvalidPayload;
         end; // case
-      end; // if
-    end; // if PayloadType
+      end // if  bufleft OK
+      else if (PayloadSize < 0) or (BufLeft < PayloadSize) then
+        result := tgoPayloadDecodeResult.pdBufferOverrun;
+    end // if PayloadType OK
+    else
+      result := tgoPayloadDecodeResult.pdInvalidPayloadType; // unknown PayloadType
   end; // if bufleft
 
   if result = tgoPayloadDecodeResult.pdOK then
@@ -1208,8 +1242,9 @@ begin
                 tgoPayloadDecodeResult.pdEOF:
                   break;
 
-                tgoPayloadDecodeResult.pdInvalidPayload:
+                tgoPayloadDecodeResult.pdInvalidPayloadType, tgoPayloadDecodeResult.pdBufferOverrun:
                   Exit(tgoReplyValidationResult.rvrDataError);
+
               end; // Case
             until False;
 
