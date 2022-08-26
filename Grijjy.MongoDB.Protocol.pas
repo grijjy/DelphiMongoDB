@@ -35,7 +35,7 @@ type
   { Is raised when a connection error (or timeout) occurs. }
   EgoMongoDBConnectionError = class(EgoMongoDBError);
 
-  tgoMongoReadPreference = (primary = 0, primaryPreferred , secondary , secondaryPreferred , nearest );
+  tgoMongoReadPreference = (primary = 0, primaryPreferred , secondary , secondaryPreferred , nearest , fromParent=31);
 
   { Query flags as used by TgoMongoProtocol.OpQuery }
   TgoMongoQueryFlag = ( // OBSOLETE

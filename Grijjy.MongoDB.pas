@@ -261,9 +261,12 @@ type
       yet. The database is only opened once you start reading, writing or
       querying it. }
     function GetDatabase(const AName: string): IgoMongoDatabase;
-    function GetReadPreference: tgoMongoReadPreference;
-    procedure SetReadPreference(const Value: tgoMongoReadPreference);
-    property ReadPreference: tgoMongoReadPreference read GetReadPreference write SetReadPreference;
+    function GetGlobalReadPreference: tgoMongoReadPreference;
+    procedure SetGlobalReadPreference(const Value: tgoMongoReadPreference);
+
+    { GlobalReadPreference sets the global ReadPreference for all objects (database, collection etc)
+      that do not have an individual specific ReadPreference. }
+    property GlobalReadPreference: tgoMongoReadPreference read GetGlobalReadPreference write SetGlobalReadPreference;
   end;
 
   { Represents a database in MongoDB.
@@ -341,6 +344,7 @@ type
 
     { The name of the database. }
     property name: string read _GetName;
+    { setting ReadPreference on the database will override the global readpreference }
     property ReadPreference: tgoMongoReadPreference read GetReadPreference write SetReadPreference;
   end;
 
@@ -567,7 +571,6 @@ type
     { Return statistics about the collection, see
       https://www.mongodb.com/docs/manual/reference/command/collStats }
     function Stats: TgoBsonDocument;
-
     function GetReadPreference: tgoMongoReadPreference;
     procedure SetReadPreference(const Value: tgoMongoReadPreference);
 
@@ -576,6 +579,8 @@ type
 
     { The name of the collection. }
     property name: string read _GetName;
+
+    { setting ReadPreference on the collection will override the global readpreference }
     property ReadPreference: tgoMongoReadPreference read GetReadPreference write SetReadPreference;
   end;
 
@@ -619,7 +624,7 @@ type
     { Authentication password }
     Password: string;
 
-    GlobalReadPreference:tgoMongoReadPreference;
+    GlobalReadPreference: tgoMongoReadPreference;
   public
     { Creates a settings record with the default settings }
     class function Create: TgoMongoClientSettings; static;
@@ -637,8 +642,8 @@ type
 {$REGION 'Internal Declarations'}
   private
     FProtocol: TgoMongoProtocol;
-    function GetReadPreference: tgoMongoReadPreference;
-    procedure SetReadPreference(const Value: tgoMongoReadPreference);
+    function GetGlobalReadPreference: tgoMongoReadPreference;
+    procedure SetGlobalReadPreference(const Value: tgoMongoReadPreference);
   protected
     { IgoMongoClient }
     function ListDatabaseNames: TArray<string>;
@@ -671,7 +676,10 @@ type
     constructor Create(const AHost: string; const APort: Integer; const ASettings: TgoMongoClientSettings); overload;
     constructor Create(const ASettings: TgoMongoClientSettings); overload;
     destructor Destroy; override;
-    property ReadPreference: tgoMongoReadPreference read GetReadPreference write SetReadPreference;
+
+    { GlobalReadPreference sets the global ReadPreference for all objects (database, collection etc)
+      that do not have an individual specific ReadPreference. }
+    property GlobalReadPreference: tgoMongoReadPreference read GetGlobalReadPreference write SetGlobalReadPreference;
   end;
 
 resourcestring
@@ -983,11 +991,9 @@ type
     function ListIndexNames: TArray<string>;
     function ListIndexes: TArray<TgoBsonDocument>;
     function Stats: TgoBsonDocument;
-
-    property ReadPreference: tgoMongoReadPreference read GetReadPreference write SetReadPreference;
-
 {$ENDREGION 'Internal Declarations'}
   public
+    property ReadPreference: tgoMongoReadPreference read GetReadPreference write SetReadPreference;
     constructor Create(const ADatabase: TgoMongoDatabase; const AName: string);
   end;
 
@@ -1014,7 +1020,7 @@ begin
   Result.AuthDatabase := '';
   Result.Username := '';
   Result.Password := '';
-  Result.GlobalReadPreference:=tgoMongoReadPreference.Primary;
+  Result.GlobalReadPreference := tgoMongoReadPreference.Primary;
 end;
 
 { TgoMongoClient }
@@ -1029,7 +1035,9 @@ var
   S: TgoMongoProtocolSettings;
 begin
   inherited Create;
-  S.GlobalReadPreference:=aSettings.GlobalReadPreference;
+  S.GlobalReadPreference := ASettings.GlobalReadPreference;
+  if S.GlobalReadPreference = tgoMongoReadPreference.fromParent then
+    S.GlobalReadPreference := tgoMongoReadPreference.Primary;
   S.ConnectionTimeout := ASettings.ConnectionTimeout;
   S.ReplyTimeout := ASettings.ReplyTimeout;
   S.QueryFlags := ASettings.QueryFlags;
@@ -1065,6 +1073,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('dropDatabase', 1);
   Writer.WriteString('$db', AName);
+  { TODO : Readpreference??? }
   Writer.WriteEndDocument;
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
@@ -1101,6 +1110,7 @@ begin
   Writer.WriteStartDocument;
   Writer.WriteInt32('listDatabases', 1);
   Writer.WriteString('$db', DB_ADMIN);
+  { TODO : Readpreference??? }
   Writer.WriteEndDocument;
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
@@ -1126,7 +1136,6 @@ var
   InstArray: TgoBsonArray;
   I: Integer;
 begin
-  { TODO : Support OP_MSG }
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteInt32('isMaster', 1);
@@ -1229,9 +1238,8 @@ begin
     Result := Doc;
 end;
 
-function TgoMongoClient.GetReadPreference: tgoMongoReadPreference;
+function TgoMongoClient.GetGlobalReadPreference: tgoMongoReadPreference;
 begin
-  // TODO -cMM: TgoMongoClient.GetReadPreference default body inserted
   Result := FProtocol.GlobalReadPreference;
 end;
 
@@ -1275,7 +1283,7 @@ begin
       Result := Doc['ok']
 end;
 
-procedure TgoMongoClient.SetReadPreference(const Value: tgoMongoReadPreference);
+procedure TgoMongoClient.SetGlobalReadPreference(const Value: tgoMongoReadPreference);
 begin
   FProtocol.GlobalReadPreference := Value;
 end;
@@ -1289,7 +1297,7 @@ end;
 
 procedure TgoMongoDatabase.SpecifyReadPreference(const AWriter: IgoBsonWriter);
 begin
-  DoSpecifyReadPreference(FReadPreference, AWriter);
+  DoSpecifyReadPreference(GetReadPreference, AWriter);
 end;
 
 constructor TgoMongoDatabase.Create(const AClient: TgoMongoClient; const AName: string);
@@ -1301,7 +1309,7 @@ begin
   FName := AName;
   FProtocol := AClient.Protocol;
   Assert(FProtocol <> nil);
-  FReadPreference := FProtocol.GlobalReadPreference;
+  FReadPreference := tgoMongoReadPreference.fromParent;
 end;
 
 function TgoMongoDatabase.AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
@@ -1322,7 +1330,7 @@ begin
   Writer.WriteEndDocument;
   Reply := Protocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, FReadPreference);
+  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
 end;
 
 procedure TgoMongoDatabase.DropCollection(const AName: string);
@@ -1430,6 +1438,8 @@ end;
 function TgoMongoDatabase.GetReadPreference: tgoMongoReadPreference;
 begin
   Result := FReadPreference;
+  if Result = tgoMongoReadPreference.fromParent then
+    Result := FProtocol.GlobalReadPreference;
 end;
 
 function TgoMongoDatabase.ListCollectionNames: TArray<string>;
@@ -1458,7 +1468,7 @@ begin
   Writer.WriteEndDocument;
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := ExhaustCursor(firstBatchToCursor(Reply.FirstDoc, FProtocol, FReadPreference));
+  Result := ExhaustCursor(firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
 end;
 
 function TgoMongoDatabase.RenameCollection(const AFromNamespace, AToNamespace: string; const ADropTarget: Boolean): Boolean;
@@ -1678,7 +1688,7 @@ end;
 
 procedure TgoMongoCollection.SpecifyReadPreference(const AWriter: IgoBsonWriter);
 begin
-  DoSpecifyReadPreference(FReadPreference, AWriter);
+  DoSpecifyReadPreference(GetReadPreference, AWriter);
 end;
 
 procedure TgoMongoCollection.AddWriteConcern(const AWriter: IgoBsonWriter);
@@ -1716,7 +1726,7 @@ begin
   FDatabase := ADatabase;
   FName := AName;
   FProtocol := ADatabase.Protocol;
-  FReadPreference := FProtocol.GlobalReadPreference;
+  FReadPreference := tgoMongoReadPreference.fromParent;
   Assert(FProtocol <> nil);
 end;
 
@@ -1842,7 +1852,7 @@ begin
   Writer.WriteEndDocument;
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := ExhaustCursor(firstBatchToCursor(Reply.FirstDoc, FProtocol, FReadPreference));
+  Result := ExhaustCursor(firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
 end;
 
 function TgoMongoCollection.Delete(const AFilter: TgoMongoFilter; const AOrdered: Boolean; const ALimit: Integer): Integer;
@@ -1964,7 +1974,7 @@ begin
 
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, FReadPreference);
+  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
@@ -2028,6 +2038,8 @@ end;
 function TgoMongoCollection.GetReadPreference: tgoMongoReadPreference;
 begin
   Result := FReadPreference;
+  if Result = tgoMongoReadPreference.fromParent then
+    Result := FDatabase.ReadPreference;
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument;
