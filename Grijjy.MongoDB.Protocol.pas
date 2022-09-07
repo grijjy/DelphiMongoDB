@@ -994,7 +994,7 @@ var
   _Now, _Init, LastRecv: TDateTime;
 begin
   result := nil;
-
+  { TODO : Handle per-request timeout as in find.maxTimeMS }
   _Init := Now;
   while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, result)) do
   begin
@@ -1099,7 +1099,8 @@ begin
             break;
           end;
 
-        tgoReplyValidationResult.rvrDataError, tgoReplyValidationResult.rvrChecksumInvalid:
+        tgoReplyValidationResult.rvrDataError,
+        tgoReplyValidationResult.rvrChecksumInvalid:
           begin
             // There seems to be a valid header and there are enough bytes in the buffer, but the parser or checksum failed
             if HaveReplyMsgHeader(MsgHeader) then

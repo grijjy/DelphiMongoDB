@@ -6,7 +6,6 @@ unit Grijjy.MongoDB;
 interface
 
 uses
-  winapi.Windows,
   System.SysUtils,
   System.Generics.Collections,
   Grijjy.Bson,
@@ -329,13 +328,13 @@ type
       https://docs.mongodb.com/manual/reference/command/dbStats/ }
     function GetDbStats(const AScale: Integer): TgoMongoStatistics;
 
-    { Issue a command against the database that returns one document.
-      Similar to AdminCommand. }
+    { Issue a command against the MongoDB instance that returns a cursor. }
     function AdminCommand(CommandToIssue: tWriteCmd): igoMongoCursor;
 
-    { Issue a command against the database that returns one document.
+    { Issue a command against the database that returns a cursor.
       Similar to AdminCommand. }
     function Command(CommandToIssue: tWriteCmd): igoMongoCursor;
+
     function GetReadPreference: tgoMongoReadPreference;
     procedure SetReadPreference(const Value: tgoMongoReadPreference);
 
@@ -362,6 +361,78 @@ type
       Returns:
       An array of documents in the cursor. }
     function ToArray: TArray<TgoBsonDocument>;
+  end;
+
+  { Fluent Interface for igoMongoCollection.find(),
+    see https://www.mongodb.com/docs/manual/reference/command/find/
+    the class factory is function "findOptions"}
+  igoMongoFindOptions = interface
+    ['{5E3602BD-90EE-493A-9A91-50E7209707E4}']
+    { Filter: Optional. The query predicate. If unspecified, then all documents
+      in the collection will match the predicate. }
+    function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
+    function filter(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { Sort:Optional. The sort specification for the ordering of the results. }
+    function sort(const AValue: TgoMongoSort): igoMongoFindOptions; overload;
+    function sort(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { Projection: Optional. The projection specification to determine which fields to include
+      in the returned documents. See Projection and Projection Operators. }
+    function projection(const AValue: TgoMongoProjection): igoMongoFindOptions; overload;
+    function projection(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { hint:Optional. Index specification. Specify either the index name as a string or
+      the index key pattern. If specified, then the query system will only consider
+      plans using the hinted index. }
+    function hint(AValue: string): igoMongoFindOptions;
+    { Skip: Optional. Number of documents to skip. Defaults to 0. }
+    function skip(AValue: Integer): igoMongoFindOptions;
+    { limit: Optional. The maximum number of documents to return.
+      If unspecified, then defaults to no limit.
+      A limit of 0 is equivalent to setting no limit. }
+    function limit(AValue: Integer): igoMongoFindOptions;
+    { batchSize: Optional. The number of documents to return in the first batch.
+      Defaults to 101.  A batchSize of 0 means that the cursor will be established, but
+      no documents  will be returned in the first batch. Unlike the previous wire protocol
+      version,  a batchSize of 1 for the find command does not close the cursor. }
+    function batchSize(AValue: Integer): igoMongoFindOptions;
+    { singleBatch: Optional. Determines whether to close the cursor
+      after the first batch. Defaults to false. }
+    function singleBatch(AValue: Boolean): igoMongoFindOptions;
+    function comment(const AValue: string): igoMongoFindOptions;
+    { maxTimeMS: Optional. The cumulative time limit in milliseconds for processing
+      operations on the cursor. MongoDB aborts the operation at the earliest following
+      interrupt point. }
+    function maxTimeMS(AValue: Integer): igoMongoFindOptions;
+    { readConcern: See https://www.mongodb.com/docs/manual/reference/glossary/#std-term-read-concern }
+    function readConcern(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function readConcern(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { returnKey: Optional. If true, returns only the index keys in the resulting documents.
+      Default value is false. If returnKey is true and the   find  command does not use an
+      index, the returned documents will be empty. }
+    function returnKey(Value: Boolean): igoMongoFindOptions;
+    { showRecordID: Optional. Determines whether to return the record identifier for each document.
+      If true, adds a field $recordId to the returned documents. }
+    function showRecordId(Value: Boolean): igoMongoFindOptions;
+    { noCursorTimeout: Optional. Prevents the server from timing out idle
+      cursors after an inactivity period (10 minutes). }
+    function noCursorTimeout(Value: Boolean): igoMongoFindOptions;
+    function allowPartialResults(Value: Boolean): igoMongoFindOptions;
+    { min:optional. The inclusive lower bound for a specific index. See cursor.min()
+      for details. Starting in MongoDB 4.2, to use the min field, the command must also use
+      hint unless the specified filter is an equality condition on the _id field { _id: <value> }
+    function min(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function min(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { max: Optional. The exclusive upper bound for a specific index. See
+      cursor.max() for details. Starting in MongoDB 4.2, to use the max field,
+      the command must also use hint unless the specified filter is an equality
+      condition on the _id field { _id: <value> }
+    function max(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function max(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { collation: Optional. Specifies the collation to use for the operation. }
+    function collation(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function collation(const aJsonDoc: string): igoMongoFindOptions; overload;
+    { allowDiskUse:Optional. Use this option to override allowDiskUseByDefault for a specific query. }
+    function allowDiskUse(Value: Boolean): igoMongoFindOptions;
+    procedure WriteOptions(const Writer: IgoBsonWriter);
   end;
 
   { Represents a collection in a MongoDB database.
@@ -466,12 +537,20 @@ type
     { Finds the documents matching the filter.
 
       Parameters:
+
+      AOptions: a fluent interface that will let you specify all options such
+      as the filter, projection, sorting.
+
+      Legacy parameters:
+
       AFilter: (optional) filter containing query operators to search for
       documents that match the filter. If not specified, then all documents
       in the collection are returned.
+
       AProjection: (optional) projection that specifies the fields to return
       in the documents that match the query filter. If not specified, then
       all fields are returned.
+
       ASort: (optional) sort modifier, used to sort the results. Note: an
       exception is raised when the result set is very large (32MB or larger)
       and cannot be sorted.
@@ -481,23 +560,33 @@ type
       be empty if there are no documents that match the filter.
       Enumerating over the result may trigger additional calls to the MongoDB
       server. }
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+
+    function Find(AOptions: igoMongoFindOptions): igoMongoCursor; overload;
+    function Find: igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
     function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-    function Find: igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
-      const ANumberToSkip: Integer = 0): igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort; aSkip: Integer = 0)
+      : igoMongoCursor; overload;
 
     { Finds the first document matching the filter.
 
       Parameters:
+
+      AOptions: a fluent interface that will let you specify all options such
+      as the filter, projection, sorting.
+
+      Legacy Parameters:
+
       AFilter: filter containing query operators to search for the document
       that matches the filter.
+
       ASort: (optional) use this to find the maximum or minimum value of a field.
       An empty filter (tgomongofilter.Empty) with ASort=tgomongosort.Descending('price')
       will return the document having the highest 'price'.
       For best performance, use indexes in the collection.
+
       AProjection: (optional) projection that specifies the fields to return
       in the document that matches the query filter. If not specified, then
       all fields are returned.
@@ -506,6 +595,8 @@ type
       The first document that matches the filter. If no documents match the
       filter, then a null-documents is returned (call its IsNil method to
       check for this). }
+
+    function FindOne(AOptions: igoMongoFindOptions): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
@@ -685,6 +776,8 @@ type
 resourcestring
   RS_MONGODB_CONNECTION_ERROR = 'Error connecting to the MongoDB database';
   RS_MONGODB_GENERIC_ERROR = 'Unspecified error while performing MongoDB operation';
+
+function FindOptions: igoMongoFindOptions; // class factory
 
 implementation
 
@@ -886,8 +979,7 @@ begin
   end;
 end;
 
-function firstBatchToCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol; AReadPreference: tgoMongoReadPreference)
-  : igoMongoCursor;
+function CreateCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol; AReadPreference: tgoMongoReadPreference): igoMongoCursor;
 var
   Cursor: TgoBsonDocument;
   Value: TgoBsonValue;
@@ -896,7 +988,6 @@ var
   Namespace: string;
   Docs: TgoBsonArray;
   InitialPage: TArray<TBytes>;
-  icursor: igoMongoCursor;
 begin
   Result := nil;
   if not ADoc.IsNil then
@@ -909,16 +1000,14 @@ begin
         SetLength(InitialPage, Docs.Count);
         for I := 0 to Docs.Count - 1 do
           InitialPage[I] := Docs[I].AsBsonDocument.ToBson;
-        icursor := TgoMongoCursor.Create(AProtocol, AReadPreference, Namespace, InitialPage, CursorID);
-        Result := icursor;
+        Result := TgoMongoCursor.Create(AProtocol, AReadPreference, Namespace, InitialPage, CursorID);
       end;
     end
     else // Just return a cursor with this one document
     begin
       SetLength(InitialPage, 1);
       InitialPage[0] := ADoc.ToBson;
-      icursor := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, 0);
-      Result := icursor;
+      Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, 0);
     end;
   end;
 end;
@@ -968,13 +1057,17 @@ type
     function UpdateMany(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
       const AOrdered: Boolean = True): Integer;
 
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
-    function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
     function Find: igoMongoCursor; overload;
+    function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+
+    function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
-      const ANumberToSkip: Integer = 0): igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort; aSkip: Integer = 0)
+      : igoMongoCursor; overload;
+
+    function Find(AOptions: igoMongoFindOptions): igoMongoCursor; overload;
+    function FindOne(AOptions: igoMongoFindOptions): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
     function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
@@ -1209,7 +1302,7 @@ begin
   Writer.WriteEndDocument;
   Reply := Protocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, FProtocol.GlobalReadPreference);
+  Result := CreateCursor(Reply.FirstDoc, FProtocol, FProtocol.GlobalReadPreference);
 end;
 
 function TgoMongoClient.BuildInfo: TgoBsonDocument;
@@ -1330,7 +1423,7 @@ begin
   Writer.WriteEndDocument;
   Reply := Protocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
+  Result := CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
 end;
 
 procedure TgoMongoDatabase.DropCollection(const AName: string);
@@ -1468,7 +1561,7 @@ begin
   Writer.WriteEndDocument;
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := ExhaustCursor(firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
+  Result := ExhaustCursor(CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
 end;
 
 function TgoMongoDatabase.RenameCollection(const AFromNamespace, AToNamespace: string; const ADropTarget: Boolean): Boolean;
@@ -1852,7 +1945,7 @@ begin
   Writer.WriteEndDocument;
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := ExhaustCursor(firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
+  Result := ExhaustCursor(CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
 end;
 
 function TgoMongoCollection.Delete(const AFilter: TgoMongoFilter; const AOrdered: Boolean; const ALimit: Integer): Integer;
@@ -1889,183 +1982,85 @@ begin
   Result := (Delete(AFilter, True, 1) = 1);
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter): igoMongoCursor;
-var
-  Projection: TgoMongoProjection; // record
-  Sort: TgoMongoSort; // record
+function TgoMongoCollection.Find: igoMongoCursor;
 begin
-  Projection.SetNil;
-  Sort.SetNil;
-  Result := Find(AFilter, Projection, Sort);
+  Result := Find(FindOptions);
+end;
+
+function TgoMongoCollection.Find(const AFilter: TgoMongoFilter): igoMongoCursor;
+begin
+  Result := Find(FindOptions.filter(AFilter));
 end;
 
 function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor;
-var
-  Sort: TgoMongoSort; // record
 begin
-  Sort.SetNil;
-  Result := Find(AFilter, AProjection, Sort);
-end;
-
-function TgoMongoCollection.Find: igoMongoCursor;
-var
-  Projection: TgoMongoProjection; // record
-  Sort: TgoMongoSort; // record
-  Filter: TgoMongoFilter; // record
-begin
-  Projection.SetNil;
-  Sort.SetNil;
-  Filter := TgoMongoFilter.Empty;
-  Result := Find(Filter, Projection, Sort);
+  Result := Find(FindOptions.filter(AFilter).projection(AProjection));
 end;
 
 function TgoMongoCollection.Find(const AProjection: TgoMongoProjection): igoMongoCursor;
-var
-  Sort: TgoMongoSort;
-  Filter: TgoMongoFilter;
 begin
-  Sort.SetNil;
-  Filter := TgoMongoFilter.Empty;
-  Result := Find(Filter, AProjection, Sort);
+  Result := Find(FindOptions.projection(AProjection));
 end;
 
 function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor;
-var
-  Projection: TgoMongoProjection;
 begin
-  Projection.SetNil;
-  Result := Find(AFilter, Projection, ASort);
+  Result := Find(FindOptions.filter(AFilter).sort(ASort));
 end;
 
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
 function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
-const ANumberToSkip: Integer = 0): igoMongoCursor;
+aSkip: Integer = 0): igoMongoCursor;
+begin
+  Result := Find(FindOptions.filter(AFilter).projection(AProjection).sort(ASort).skip(aSkip));
+end;
+
+function TgoMongoCollection.Find(AOptions: igoMongoFindOptions): igoMongoCursor;
 var
   Reply: IgoMongoReply;
   Writer: IgoBsonWriter;
 begin
   Result := nil;
-
   Writer := TgoBsonWriter.Create;
   Writer.WriteStartDocument;
   Writer.WriteString('find', FName);
   SpecifyDB(Writer);
   SpecifyReadPreference(Writer);
-
-  if not AFilter.IsNil then
-  begin
-    Writer.WriteName('filter');
-    Writer.WriteRawBsonDocument(AFilter.ToBson);
-  end;
-  if not ASort.IsNil then
-  begin
-    Writer.WriteName('sort');
-    Writer.WriteRawBsonDocument(ASort.ToBson);
-  end;
-  if not AProjection.IsNil then
-  begin
-    Writer.WriteName('projection');
-    Writer.WriteRawBsonDocument(AProjection.ToBson);
-  end;
-  Writer.WriteInt32('skip', ANumberToSkip);
+  AOptions.WriteOptions(Writer);
   Writer.WriteEndDocument;
-
-  // outputdebugstring(pchar(tgobsondocument.Load(writer.tobson).ToJson));
-
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   HandleCommandReply(Reply);
-  Result := firstBatchToCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
+  Result := CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
+end;
+
+function TgoMongoCollection.FindOne(AOptions: igoMongoFindOptions): TgoBsonDocument;
+var
+  Docs: TArray<TgoBsonDocument>;
+begin
+  Result.SetNil;
+  Docs := ExhaustCursor(Find(AOptions.singleBatch(True).limit(1)));
+  if Length(Docs) > 0 then
+    Result := Docs[0];
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
   : TgoBsonDocument;
-var
-  Reply: IgoMongoReply;
-  Writer: IgoBsonWriter;
-  Doc, Cursor: TgoBsonDocument;
-  Value: TgoBsonValue;
-  Docs: TgoBsonArray;
 begin
-  // Important info here !!!!!
-  // https://www.mongodb.com/docs/manual/reference/command/find/
-
-  Result.SetNil;
-  Writer := TgoBsonWriter.Create;
-  Writer.WriteStartDocument;
-  Writer.WriteString('find', FName);
-  SpecifyDB(Writer);
-  SpecifyReadPreference(Writer);
-  if not AFilter.IsNil then
-  begin
-    Writer.WriteName('filter');
-    Writer.WriteRawBsonDocument(AFilter.ToBson);
-  end;
-  if not ASort.IsNil then
-  begin
-    Writer.WriteName('sort');
-    Writer.WriteRawBsonDocument(ASort.ToBson);
-  end;
-  if not AProjection.IsNil then
-  begin
-    Writer.WriteName('projection');
-    Writer.WriteRawBsonDocument(AProjection.ToBson);
-  end;
-  Writer.WriteInt32('limit', 1); // limit total result set to 1
-  // Writer.WriteInt32('batchSize', 1); // limit batch size to 1 (default is 101) --> redundant
-  Writer.WriteBoolean('singleBatch', True); // close cursor after first batch
-
-  Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
-  HandleCommandReply(Reply);
-  Doc := Reply.FirstDoc;
-  if not Doc.IsNil then
-  begin
-    if Doc.TryGetValue('cursor', Value) then
-    begin
-      Cursor := Value.AsBsonDocument;
-      // we don't need the cursor ID because it will be 0
-      // FCursorId := cursor['id'];
-      if Cursor.TryGetValue('firstBatch', Value) then
-      begin
-        Docs := Value.AsBsonArray;
-        if Docs.Count > 0 then // need just the first one
-          Result := Docs[0].AsBsonDocument;
-      end;
-    end;
-  end;
-end;
-
-function TgoMongoCollection.GetReadPreference: tgoMongoReadPreference;
-begin
-  Result := FReadPreference;
-  if Result = tgoMongoReadPreference.fromParent then
-    Result := FDatabase.ReadPreference;
+  Result := FindOne(FindOptions.filter(AFilter).projection(AProjection).sort(ASort));
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument;
-var
-  Sort: TgoMongoSort; // record
 begin
-  Sort.SetNil;
-  Result := FindOne(AFilter, AProjection, Sort);
+  Result := FindOne(FindOptions.filter(AFilter).projection(AProjection));
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument;
-var
-  Projection: TgoMongoProjection; // record
-  Sort: TgoMongoSort; // record
 begin
-  Projection.SetNil;
-  Sort.SetNil;
-  Result := FindOne(AFilter, Projection, Sort);
+  Result := FindOne(FindOptions.filter(AFilter));
 end;
 
 function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument;
-var
-  Projection: TgoMongoProjection;
 begin
-  Projection.SetNil;
-  Result := FindOne(AFilter, Projection, ASort);
+  Result := FindOne(FindOptions.filter(AFilter).sort(ASort));
 end;
 
 function TgoMongoCollection.InsertMany(const ADocuments: array of TgoBsonDocument; const AOrdered: Boolean): Integer;
@@ -2082,6 +2077,13 @@ begin
     Result := InsertMany(@ADocuments[0], Length(ADocuments), AOrdered)
   else
     Result := 0;
+end;
+
+function TgoMongoCollection.GetReadPreference: tgoMongoReadPreference;
+begin
+  Result := FReadPreference;
+  if Result = tgoMongoReadPreference.fromParent then
+    Result := FDatabase.ReadPreference;
 end;
 
 function TgoMongoCollection.InsertMany(const ADocuments: PgoBsonDocument; const ACount: Integer; const AOrdered: Boolean): Integer;
@@ -2101,7 +2103,7 @@ begin
   BytesEncoded := 0;
   while (Remaining > 0) do
   begin
-    ItemsInBatch := Min(Remaining, FProtocol.MaxWriteBatchSize);
+    ItemsInBatch := min(Remaining, FProtocol.MaxWriteBatchSize);
     SetLength(Payload1, 0);
     Writer := TgoBsonWriter.Create;
     Writer.WriteStartDocument;
@@ -2329,6 +2331,339 @@ begin
     Self.Host := '';
     Self.Port := 0;
   end;
+end;
+
+type
+  { Record that contains most function parameters for collection.Find(),
+    see https://www.mongodb.com/docs/manual/reference/command/find/.
+    We also implement a fluent interface for this. }
+
+  tgoMongoFindOptionsRec = record
+    skip: Integer;
+    limit: Integer;
+    batchSize: Integer;
+    maxTimeMS: Integer;
+    singleBatch: Boolean;
+    returnKey: Boolean;
+    showRecordId: Boolean;
+    noCursorTimeout: Boolean;
+    allowDiskUse: Boolean;
+    allowPartialResults: Boolean;
+    filter: TgoBsonDocument;
+    sort: TgoBsonDocument;
+    min: TgoBsonDocument;
+    max: TgoBsonDocument;
+    projection: TgoBsonDocument;
+    collation: TgoBsonDocument;
+    readConcern: TgoBsonDocument;
+    hint: string;
+    comment: string;
+    procedure WriteOptions(const Writer: IgoBsonWriter);
+  end;
+
+  { Class that implements fluent interface igoMongoFindOptions }
+
+  tgoMongoFindOptions = class(TInterfacedObject, igoMongoFindOptions)
+  private
+    foptions: tgoMongoFindOptionsRec;
+    function getOptions: tgoMongoFindOptionsRec;
+    function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
+    function filter(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function sort(const AValue: TgoMongoSort): igoMongoFindOptions; overload;
+    function sort(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function projection(const AValue: TgoMongoProjection): igoMongoFindOptions; overload;
+    function projection(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function hint(AValue: string): igoMongoFindOptions;
+    function skip(AValue: Integer): igoMongoFindOptions;
+    function limit(AValue: Integer): igoMongoFindOptions;
+    function batchSize(AValue: Integer): igoMongoFindOptions;
+    function singleBatch(AValue: Boolean): igoMongoFindOptions;
+    function comment(const AValue: string): igoMongoFindOptions;
+    function maxTimeMS(AValue: Integer): igoMongoFindOptions;
+    function readConcern(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function readConcern(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function min(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function min(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function max(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function max(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function returnKey(AValue: Boolean): igoMongoFindOptions;
+    function showRecordId(AValue: Boolean): igoMongoFindOptions;
+    function noCursorTimeout(AValue: Boolean): igoMongoFindOptions;
+    function allowPartialResults(AValue: Boolean): igoMongoFindOptions;
+    function collation(const AValue: TgoBsonDocument): igoMongoFindOptions; overload;
+    function collation(const aJsonDoc: string): igoMongoFindOptions; overload;
+    function allowDiskUse(AValue: Boolean): igoMongoFindOptions;
+    procedure WriteOptions(const Writer: IgoBsonWriter);
+    function parse(const aJsonDoc: string; var Bson: TgoBsonDocument): igoMongoFindOptions;
+  public
+    constructor Create;
+  end;
+
+
+
+function tgoMongoFindOptions.allowDiskUse(AValue: Boolean): igoMongoFindOptions;
+begin
+  foptions.allowDiskUse := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.allowPartialResults(AValue: Boolean): igoMongoFindOptions;
+begin
+  foptions.allowPartialResults := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.batchSize(AValue: Integer): igoMongoFindOptions;
+begin
+  foptions.batchSize := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.collation(const AValue: TgoBsonDocument): igoMongoFindOptions;
+begin
+  foptions.collation := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.parse(const aJsonDoc: string; var Bson: TgoBsonDocument): igoMongoFindOptions;
+begin
+  if aJsonDoc = '' then
+    Bson.SetNil
+  else
+    Bson := TgoBsonDocument.parse(aJsonDoc);
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.collation(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.collation);
+end;
+
+function tgoMongoFindOptions.comment(const AValue: string): igoMongoFindOptions;
+begin
+  foptions.comment := AValue;
+  Result := Self;
+end;
+
+constructor tgoMongoFindOptions.Create;
+begin
+  inherited Create;
+  //foptions is a "member" and should already be completely filled with 0. We just make sure ...
+  fillchar(foptions,sizeof(foptions),0);
+  foptions.batchsize:=101;
+end;
+
+function tgoMongoFindOptions.filter(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.filter);
+end;
+
+function tgoMongoFindOptions.filter(const AValue: TgoMongoFilter): igoMongoFindOptions;
+begin
+  if not AValue.IsNil then
+    foptions.filter := AValue.Render
+  else
+    foptions.filter.SetNil;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.getOptions: tgoMongoFindOptionsRec;
+begin
+  Result := foptions;
+end;
+
+function tgoMongoFindOptions.hint(AValue: string): igoMongoFindOptions;
+begin
+  foptions.hint := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.limit(AValue: Integer): igoMongoFindOptions;
+begin
+  foptions.limit := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.max(const AValue: TgoBsonDocument): igoMongoFindOptions;
+begin
+  foptions.max := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.max(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.max);
+end;
+
+function tgoMongoFindOptions.maxTimeMS(AValue: Integer): igoMongoFindOptions;
+begin
+  foptions.maxTimeMS := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.min(const AValue: TgoBsonDocument): igoMongoFindOptions;
+begin
+  foptions.max := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.min(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.min);
+end;
+
+function tgoMongoFindOptions.noCursorTimeout(AValue: Boolean): igoMongoFindOptions;
+begin
+  foptions.noCursorTimeout := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.projection(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.projection);
+end;
+
+function tgoMongoFindOptions.projection(const AValue: TgoMongoProjection): igoMongoFindOptions;
+begin
+  if not AValue.IsNil then
+    foptions.projection := AValue.Render
+  else
+    foptions.projection.SetNil;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.readConcern(const AValue: TgoBsonDocument): igoMongoFindOptions;
+begin
+  foptions.readConcern := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.readConcern(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.readConcern);
+end;
+
+function tgoMongoFindOptions.returnKey(AValue: Boolean): igoMongoFindOptions;
+begin
+  foptions.returnKey := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.showRecordId(AValue: Boolean): igoMongoFindOptions;
+begin
+  foptions.showRecordId := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.singleBatch(AValue: Boolean): igoMongoFindOptions;
+begin
+  foptions.singleBatch := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.skip(AValue: Integer): igoMongoFindOptions;
+begin
+  foptions.skip := AValue;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.sort(const AValue: TgoMongoSort): igoMongoFindOptions;
+begin
+  if not AValue.IsNil then
+    foptions.sort := AValue.Render
+  else
+    foptions.sort.SetNil;
+  Result := Self;
+end;
+
+function tgoMongoFindOptions.sort(const aJsonDoc: string): igoMongoFindOptions;
+begin
+  Result := parse(aJsonDoc, foptions.sort);
+end;
+
+procedure tgoMongoFindOptions.WriteOptions(const Writer: IgoBsonWriter);
+begin
+  foptions.WriteOptions(Writer);
+end;
+
+function FindOptions: igoMongoFindOptions;
+begin
+  Result := tgoMongoFindOptions.Create;
+end;
+
+// *********************************
+
+procedure tgoMongoFindOptionsRec.WriteOptions(const Writer: IgoBsonWriter);
+begin
+  if not filter.IsNil then
+  begin
+    Writer.WriteName('filter');
+    Writer.WriteRawBsonDocument(filter.ToBson);
+  end;
+  if not sort.IsNil then
+  begin
+    Writer.WriteName('sort');
+    Writer.WriteRawBsonDocument(sort.ToBson);
+  end;
+  if not projection.IsNil then
+  begin
+    Writer.WriteName('projection');
+    Writer.WriteRawBsonDocument(projection.ToBson);
+  end;
+  if hint <> '' then
+    Writer.WriteString('hint', hint);
+  if skip > 0 then
+    Writer.WriteInt32('skip', skip);
+  if limit > 0 then
+    Writer.WriteInt32('limit', limit);
+  if batchSize > 0 then
+    Writer.WriteInt32('batchSize', limit);
+  if singleBatch then
+    Writer.WriteBoolean('singleBatch', singleBatch);
+  if comment <> '' then
+    Writer.WriteString('comment', comment);
+  if maxTimeMS > 0 then
+    Writer.WriteInt32('maxTimeMS', maxTimeMS);
+  if not readConcern.IsNil then
+  begin
+    Writer.WriteStartDocument('readConcern');
+    Writer.WriteRawBsonDocument(readConcern.ToBson);
+    Writer.WriteEndDocument;
+  end;
+  if not max.IsNil then
+  begin
+    Writer.WriteStartDocument('max');
+    Writer.WriteRawBsonDocument(max.ToBson);
+    Writer.WriteEndDocument;
+  end;
+
+  if not min.IsNil then
+  begin
+    Writer.WriteStartDocument('min');
+    Writer.WriteRawBsonDocument(min.ToBson);
+    Writer.WriteEndDocument;
+  end;
+
+  if returnKey then
+    Writer.WriteBoolean('returnKey', returnKey);
+  if showRecordId then
+    Writer.WriteBoolean('showRecordId', showRecordId);
+
+  if allowPartialResults then
+    Writer.WriteBoolean('allowPartialResults', allowPartialResults);
+
+  if noCursorTimeout then
+    Writer.WriteBoolean('noCursorTimeout', noCursorTimeout);
+
+  if not collation.IsNil then
+  begin
+    Writer.WriteStartDocument('collation');
+    Writer.WriteRawBsonDocument(collation.ToBson);
+    Writer.WriteEndDocument;
+  end;
+
+  if allowDiskUse then
+    Writer.WriteBoolean('allowDiskUse', allowDiskUse);
 end;
 
 end.
