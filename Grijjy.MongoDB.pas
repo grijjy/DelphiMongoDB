@@ -2617,7 +2617,7 @@ begin
   if limit > 0 then
     Writer.WriteInt32('limit', limit);
   if batchSize > 0 then
-    Writer.WriteInt32('batchSize', limit);
+    Writer.WriteInt32('batchSize', batchsize);
   if singleBatch then
     Writer.WriteBoolean('singleBatch', singleBatch);
   if comment <> '' then
