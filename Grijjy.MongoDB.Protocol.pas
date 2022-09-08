@@ -8,6 +8,7 @@ unit Grijjy.MongoDB.Protocol;
 interface
 
 uses
+  System.Diagnostics,
   System.Math,
   System.SyncObjs,
   System.SysUtils,
@@ -35,7 +36,7 @@ type
   { Is raised when a connection error (or timeout) occurs. }
   EgoMongoDBConnectionError = class(EgoMongoDBError);
 
-  tgoMongoReadPreference = (primary = 0, primaryPreferred , secondary , secondaryPreferred , nearest , fromParent=31);
+  tgoMongoReadPreference = (primary = 0, primaryPreferred, secondary, secondaryPreferred, nearest, fromParent = 31);
 
   { Query flags as used by TgoMongoProtocol.OpQuery }
   TgoMongoQueryFlag = ( // OBSOLETE
@@ -155,6 +156,10 @@ type
 type
   TgoMongoProtocol = class
 {$REGION 'Internal Declarations'}
+    { TODO : Changing the clock settings should not disrupt communication.
+      Choose a different timestamp than tDateTime }
+  type
+
   private const
     OP_MSG = 2013;
     RECV_BUFFER_SIZE = 32768;
@@ -169,7 +174,7 @@ type
     FConnection: TgoSocketConnection;
     FConnectionLock: TCriticalSection;
     FCompletedReplies: TDictionary<Integer, IgoMongoReply>;
-    FPartialReplies: TDictionary<Integer, TDateTime>;
+    FPartialReplies: TDictionary<Integer, tStopWatch>;
     FRepliesLock: TCriticalSection;
     FRecvBuffer: TBytes;
     FRecvSize: Integer;
@@ -185,7 +190,7 @@ type
     procedure Recover;
     function WaitForReply(const ARequestId: Integer): IgoMongoReply;
     function TryGetReply(const ARequestId: Integer; out AReply: IgoMongoReply): Boolean; inline;
-    function LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
+    function LastPartialReply(const ARequestId: Integer; out ALastRecv: tStopWatch): Boolean;
 
     function HaveReplyMsgHeader(out AMsgHeader; tb: TBytes; Size: Integer): Boolean; overload;
     function HaveReplyMsgHeader(out AMsgHeader): Boolean; overload;
@@ -208,6 +213,7 @@ type
     procedure RemoveReply(const ARequestId: Integer);
     procedure UpdateReplyTimeout(const ARequestId: Integer);
   public
+    function ThisMoment: tStopWatch;
     class constructor Create;
     class destructor Destroy;
 {$ENDREGION 'Internal Declarations'}
@@ -508,11 +514,10 @@ var
 
   procedure WaitForConnected;
   var
-    Start: TDateTime;
+    aNow: tStopWatch;
   begin
-    { TODO : This could cause problems on leap days. Better use UTC }
-    Start := Now;
-    while (MillisecondsBetween(Now, Start) < FSettings.ConnectionTimeout) and (FConnection.State <> TgoConnectionState.Connected) do
+    aNow := ThisMoment;
+    while ( aNow.ElapsedMilliseconds < FSettings.ConnectionTimeout) and (FConnection.State <> TgoConnectionState.Connected) do
       Sleep(5);
   end;
 
@@ -607,7 +612,7 @@ begin
   FRepliesLock := TCriticalSection.Create;
   FRecvBufferLock := TCriticalSection.Create;
   FCompletedReplies := TDictionary<Integer, IgoMongoReply>.Create;
-  FPartialReplies := TDictionary<Integer, TDateTime>.Create;
+  FPartialReplies := TDictionary<Integer, tStopWatch>.Create;
   SetLength(FRecvBuffer, RECV_BUFFER_SIZE);
   InitialHandshake;
 end;
@@ -788,7 +793,7 @@ begin
               begin
                 read(c, 1);
                 if c = #0 then
-                  break;
+                  Break;
                 SetLength(Cstring, length(Cstring) + 1); // dumb append of byte
                 Cstring[length(Cstring)] := c;
               end; // while
@@ -804,14 +809,14 @@ begin
                   tgoPayloadDecodeResult.pdOK:
                     Continue; // OK, potentially more documents
                   tgoPayloadDecodeResult.pdEOF:
-                    break; // no more documents, ready
+                    Break; // no more documents, ready
                   tgoPayloadDecodeResult.pdBufferOverrun: // Error
                     begin
                       result := tempresult; // invalidate whole result
-                      break;
+                      Break;
                     end;
                 else // can't occur
-                  break;
+                  Break;
                 end;
               end; // while
             end; // case 1
@@ -868,7 +873,7 @@ begin
     result := Connect;
 end;
 
-function TgoMongoProtocol.LastPartialReply(const ARequestId: Integer; out ALastRecv: TDateTime): Boolean;
+function TgoMongoProtocol.LastPartialReply(const ARequestId: Integer; out ALastRecv: tStopWatch): Boolean;
 begin
   FRepliesLock.Acquire;
   try
@@ -876,6 +881,11 @@ begin
   finally
     FRepliesLock.Release;
   end;
+end;
+
+function TgoMongoProtocol.ThisMoment: tStopWatch;
+begin
+  result := tStopwatch.StartNew;
 end;
 
 function TgoMongoProtocol.OpMsg(const ParamType0: TBytes; const ParamsType1: TArray<tgoPayloadType1>; NoResponse: Boolean = False)
@@ -887,7 +897,6 @@ var
   I: Integer;
   T: TBytes;
   paramtype: Byte;
-  // validation:tgoReplyValidationResult;
 begin
   if length(ParamType0) = 0 then
     raise EgoMongoDBError.Create('Mandatory document of PayloadType 0 missing in OpMsg');
@@ -991,25 +1000,23 @@ end;
 
 function TgoMongoProtocol.WaitForReply(const ARequestId: Integer): IgoMongoReply;
 var
-  _Now, _Init, LastRecv: TDateTime;
+  Start, LastRecv: tStopWatch;
 begin
-  result := nil;
   { TODO : Handle per-request timeout as in find.maxTimeMS }
-  _Init := Now;
+  result := nil;
+  Start := ThisMoment;
   while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, result)) do
   begin
-    _Now := Now;
     if LastPartialReply(ARequestId, LastRecv) then
     begin
-      { TODO : This could cause problems on leap days. Better use UTC }
-      // give reply some time to become complete
-      if (MillisecondsBetween(_Now, LastRecv) > FSettings.ReplyTimeout) then
-        break;
+      if (LastRecv.ElapsedMilliseconds > FSettings.ReplyTimeout) then
+        Break;
     end
-    else // reply is nowhere to be found
-      { TODO : This could cause problems on leap days. Better use UTC }
-      if MillisecondsBetween(_Now, _Init) > FSettings.ReplyTimeout then
-        break;
+    else // reply is nowhere to be found, do not poll longer than "FSettings.ReplyTimeout"
+    begin
+      if  Start.Elapsedmilliseconds > FSettings.ReplyTimeout then
+        Break;
+    end;
     Sleep(5);
   end;
 
@@ -1034,7 +1041,7 @@ begin
       // if it begins with a valid response header, remove its statistics
       if HaveReplyMsgHeader(MsgHeader) then
         RemoveReply(MsgHeader.RequestID);
-      // Now clear the buffer
+      // clear the buffer
       FRecvSize := 0;
     end;
   finally
@@ -1089,27 +1096,26 @@ begin
             // Update the partial reply timestamp
             if HaveReplyMsgHeader(MsgHeader) then
               UpdateReplyTimeout(MsgHeader.ResponseTo);
-            break;
+            Break;
           end;
 
         tgoReplyValidationResult.rvrOpcodeInvalid:
           begin
             // whatever is at the start of the buffer is not a valid header, discard everything
             FRecvSize := 0; // discard everything
-            break;
+            Break;
           end;
 
-        tgoReplyValidationResult.rvrDataError,
-        tgoReplyValidationResult.rvrChecksumInvalid:
+        tgoReplyValidationResult.rvrDataError, tgoReplyValidationResult.rvrChecksumInvalid:
           begin
             // There seems to be a valid header and there are enough bytes in the buffer, but the parser or checksum failed
             if HaveReplyMsgHeader(MsgHeader) then
               RemoveReply(MsgHeader.ResponseTo);
             FRecvSize := 0; // discard everything
-            break;
+            Break;
           end
       else
-        break;
+        Break;
       end; // case
     end;
   finally
@@ -1121,8 +1127,7 @@ procedure TgoMongoProtocol.UpdateReplyTimeout(const ARequestId: Integer);
 begin
   FRepliesLock.Acquire;
   try
-    { TODO : This could cause problems on leap days. Better use UTC }
-    FPartialReplies.AddOrSetValue(ARequestId, Now);
+    FPartialReplies.AddOrSetValue(ARequestId, ThisMoment);
   finally
     FRepliesLock.Release;
   end;
@@ -1241,7 +1246,7 @@ begin
                   end;
 
                 tgoPayloadDecodeResult.pdEOF:
-                  break;
+                  Break;
 
                 tgoPayloadDecodeResult.pdInvalidPayloadType, tgoPayloadDecodeResult.pdBufferOverrun:
                   Exit(tgoReplyValidationResult.rvrDataError);
