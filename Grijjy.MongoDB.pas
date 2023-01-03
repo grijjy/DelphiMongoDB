@@ -365,7 +365,7 @@ type
 
   { Fluent Interface for igoMongoCollection.find(),
     see https://www.mongodb.com/docs/manual/reference/command/find/
-    the class factory is function "findOptions"}
+    the class factory is function "findOptions" }
   igoMongoFindOptions = interface
     ['{5E3602BD-90EE-493A-9A91-50E7209707E4}']
     { Filter: Optional. The query predicate. If unspecified, then all documents
@@ -714,6 +714,11 @@ type
 
     { Authentication password }
     Password: string;
+
+    ApplicationName: string;
+
+    UseSnappyCompression: Boolean;
+    UseZlibCompression:Boolean;
 
     GlobalReadPreference: tgoMongoReadPreference;
   public
@@ -1102,6 +1107,7 @@ end;
 
 class function TgoMongoClientSettings.Create: TgoMongoClientSettings;
 begin
+  Fillchar(result, sizeof(result),0);
   Result.ConnectionTimeout := 5000;
   Result.ReplyTimeout := 5000;
   Result.QueryFlags := [];
@@ -1114,6 +1120,9 @@ begin
   Result.Username := '';
   Result.Password := '';
   Result.GlobalReadPreference := tgoMongoReadPreference.Primary;
+  Result.ApplicationName := '';
+  Result.UseSnappyCompression := true;  //snappy has priority over zlib if both are set
+  Result.UseZlibCompression := false;
 end;
 
 { TgoMongoClient }
@@ -1142,6 +1151,12 @@ begin
   S.AuthDatabase := ASettings.AuthDatabase;
   S.Username := ASettings.Username;
   S.Password := ASettings.Password;
+  S.ApplicationName := ASettings.ApplicationName;
+
+  s.UseSnappyCompression:=asettings.UseSnappyCompression;
+  s.UseZlibCompression:=asettings.UseZlibCompression;
+
+
   FProtocol := TgoMongoProtocol.Create(AHost, APort, S);
 end;
 
@@ -1205,7 +1220,7 @@ begin
   Writer.WriteString('$db', DB_ADMIN);
   { TODO : Readpreference??? }
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
   HandleCommandReply(Reply);
   Doc := Reply.FirstDoc;
   if not Doc.IsNil then
@@ -1240,7 +1255,7 @@ begin
       Writer.WriteString('Comment', AComment);
   end;
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   HandleCommandReply(Reply);
 
   Doc := Reply.FirstDoc;
@@ -1461,7 +1476,7 @@ begin
   SpecifyReadPreference(Writer);
   Writer.WriteInt32('scale', AScale);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   Doc := Reply.FirstDoc;
   if Doc.IsNil then
@@ -1524,7 +1539,7 @@ begin
   Writer.WriteBoolean('backwards', ACollation.Backwards);
   Writer.WriteEndDocument;
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
@@ -1559,7 +1574,7 @@ begin
   SpecifyDB(Writer);
   SpecifyReadPreference(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   Result := ExhaustCursor(CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
 end;
@@ -1696,7 +1711,7 @@ begin
       SpecifyReadPreference(Writer);
       Writer.WriteEndDocument;
       { "true" tells protocol to NOT expect a result - saves one roundtrip }
-      Reply := FProtocol.OpMsg(Writer.ToBson, nil, True);
+      Reply := FProtocol.OpMsg(True, Writer.ToBson, nil, True);
     except
       // always ignore exceptions in a destructor!
     end;
@@ -1742,7 +1757,7 @@ begin
   SpecifyDB(Writer);
   SpecifyReadPreference(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
   HandleTimeout(Reply);
   FIndex := 0;
   SetLength(FPage, 0);
@@ -2027,7 +2042,7 @@ begin
   SpecifyReadPreference(Writer);
   AOptions.WriteOptions(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
   HandleCommandReply(Reply);
   Result := CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
 end;
@@ -2156,7 +2171,7 @@ begin
       dec(Remaining);
     end; // FOR
 
-    Reply := FProtocol.OpMsg(Payload0, Payload1);
+    Reply := FProtocol.OpMsg(True,Payload0, Payload1);
     Inc(Result, HandleCommandReply(Reply));
   end; // While
   Assert(index = ACount);
@@ -2183,7 +2198,7 @@ begin
   Writer.WriteEndArray;
   AddWriteConcern(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 1);
 end;
 
@@ -2212,7 +2227,7 @@ begin
   Writer.WriteBoolean('ordered', AOrdered);
   AddWriteConcern(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   Result := HandleCommandReply(Reply);
 end;
 
@@ -2399,8 +2414,6 @@ type
     constructor Create;
   end;
 
-
-
 function tgoMongoFindOptions.allowDiskUse(AValue: Boolean): igoMongoFindOptions;
 begin
   foptions.allowDiskUse := AValue;
@@ -2448,9 +2461,9 @@ end;
 constructor tgoMongoFindOptions.Create;
 begin
   inherited Create;
-  //foptions is a "member" and should already be completely filled with 0. We just make sure ...
-  fillchar(foptions,sizeof(foptions),0);
-  foptions.batchsize:=101;
+  // foptions is a "member" and should already be completely filled with 0. We just make sure ...
+  fillchar(foptions, sizeof(foptions), 0);
+  foptions.batchSize := 101;
 end;
 
 function tgoMongoFindOptions.filter(const aJsonDoc: string): igoMongoFindOptions;
@@ -2617,7 +2630,7 @@ begin
   if limit > 0 then
     Writer.WriteInt32('limit', limit);
   if batchSize > 0 then
-    Writer.WriteInt32('batchSize', batchsize);
+    Writer.WriteInt32('batchSize', batchSize);
   if singleBatch then
     Writer.WriteBoolean('singleBatch', singleBatch);
   if comment <> '' then

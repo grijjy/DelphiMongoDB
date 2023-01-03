@@ -16,7 +16,9 @@ uses
   Tests.Grijjy.MongoDB.Samples in 'Tests\Tests.Grijjy.MongoDB.Samples.pas',
   Tests.Grijjy.MongoDB.Settings in 'Tests\Tests.Grijjy.MongoDB.Settings.pas',
   Grijjy.MongoDB in '..\Grijjy.MongoDB.pas',
-  Grijjy.MongoDB.Protocol in '..\Grijjy.MongoDB.Protocol.pas';
+  Grijjy.MongoDB.Protocol in '..\Grijjy.MongoDB.Protocol.pas',
+  Grijjy.MongoDB.Compressors in '..\Grijjy.MongoDB.Compressors.pas',
+  Snappy in '..\Snappy.pas';
 
 var
   runner : ITestRunner;
