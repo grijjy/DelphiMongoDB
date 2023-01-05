@@ -1233,7 +1233,7 @@ end;
 procedure TgoMongoProtocol.SocketRecv(const ABuffer: Pointer; const ASize: Integer);
 var
   MongoReply: IgoMongoReply;
-  ProcessedBytes: Integer;
+  ProcessedBytes,BytesLeft: Integer;
   MsgHeader: TMsgHeader;
 begin
   FRecvBufferLock.Enter;
@@ -1267,7 +1267,11 @@ begin
             if (ProcessedBytes = FRecvSize) then
               FRecvSize := 0
             else
-              move(FRecvBuffer[ProcessedBytes], FRecvBuffer[0], FRecvSize - ProcessedBytes);
+            begin
+              BytesLeft:=fRecvSize - ProcessedBytes;
+              move(FRecvBuffer[ProcessedBytes], FRecvBuffer[0], BytesLeft);
+              FRecvSize:=BytesLeft;
+            end;
           end;
 
         tgoReplyValidationResult.rvrGrowing:
