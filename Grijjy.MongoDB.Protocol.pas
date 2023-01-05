@@ -930,30 +930,40 @@ var
   I: Integer;
 begin
   FMaxWireVersion := 1;
+  FMinWireVersion := 1;
+  FMaxWriteBatchSize := DEF_MAX_BULK_SIZE;
+  FMaxMessageSizeBytes := DEF_MAX_MSG_SIZE;
+  fknowsZlib := False;
+  fknowsSnappy := False;
+
   try
     // https://github.com/mongodb/specifications/blob/master/source/mongodb-handshake/handshake.rst
     { isMaster is the deprecated LEGACY version of the hello command. }
     Writer := TgoBsonWriter.Create;
+
+    // ***************** main doc {
     Writer.WriteStartDocument;
     Writer.WriteInt32('hello', 1);
     Writer.WriteString('$db', DB_ADMIN);
 
+    // client {
     Writer.WriteStartDocument('client');
-
     if FSettings.ApplicationName <> '' then
     begin
+      // application {
       Writer.WriteStartDocument('application');
       Writer.WriteString('name', FSettings.ApplicationName);
-      Writer.WriteEndDocument; // application
+      Writer.WriteEndDocument; // application}
     end;
 
+    // driver {
     Writer.WriteStartDocument('driver');
     Writer.WriteString('name', 'Grijjy for Delphi/modified');
     Writer.WriteString('version', '2.0 beta');
-    Writer.WriteEndDocument; // driver
+    Writer.WriteEndDocument; // driver}
 
+    // os {
     Writer.WriteStartDocument('os');
-
     case tosVersion.Platform of
       tosVersion.tplatform.pfwindows:
         Writer.WriteString('type', 'Windows');
@@ -962,9 +972,7 @@ begin
     else
       Writer.WriteString('type', 'Linux');
     end;
-
     Writer.WriteString('name', tosVersion.Name);
-
     case tosVersion.architecture of
       tosVersion.tarchitecture.arIntelX86:
         Writer.WriteString('architecture', 'x86');
@@ -975,12 +983,11 @@ begin
     else
       Writer.WriteString('architecture', 'arm64');
     end;
-
     Writer.WriteString('version', Format('%d.%d.%d', [tosVersion.Major, tosVersion.Minor, tosVersion.Build]));
-    Writer.WriteEndDocument; // os
-
+    Writer.WriteEndDocument;  // os}
     Writer.WriteString('platform', 'Delphi');
-    Writer.WriteEndDocument; // client
+    Writer.WriteEndDocument; //  client}
+
 
     if (FSettings.UseSnappyCompression and Snappy_Implemented) or (FSettings.UseZlibCompression and ZLIB_Implemented) then
     begin
@@ -989,8 +996,8 @@ begin
         Writer.WriteString('snappy');
       if (FSettings.UseZlibCompression and ZLIB_Implemented) then
         Writer.WriteString('zlib');
-      Writer.WriteEndArray;
-      Writer.WriteEndDocument; // payload
+      Writer.WriteEndArray {compression};
+      Writer.WriteEndDocument; // main doc}
     end;
 
     Reply := OpMsg(False, Writer.ToBson, nil);
@@ -1001,15 +1008,16 @@ begin
       begin
         debug := Doc.ToJson;
 
-        FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
-        FMinWireVersion := Doc['minWireVersion'].AsInteger;
-        MaxWriteBatchSize := MAX(Doc['maxWriteBatchSize'].AsInteger, DEF_MAX_BULK_SIZE);
-        MaxMessageSizeBytes := MAX(Doc['maxMessageSizeBytes'].AsInteger, DEF_MAX_MSG_SIZE);
+        if Doc.Contains('maxWireVersion') then
+          FMaxWireVersion := Doc['maxWireVersion'].AsInteger;
+        if Doc.Contains('minWireVersion') then
+          FMinWireVersion := Doc['minWireVersion'].AsInteger;
+        if Doc.Contains('MaxWriteBatchSize') then
+          FMaxWriteBatchSize := MAX(Doc['maxWriteBatchSize'].AsInteger, DEF_MAX_BULK_SIZE);
+        if Doc.Contains('maxMessageSizeBytes') then
+          FMaxMessageSizeBytes := MAX(Doc['maxMessageSizeBytes'].AsInteger, DEF_MAX_MSG_SIZE);
 
-        fknowsZlib := False;
-        fknowsSnappy := False;
-
-        if Doc.contains('compression') then
+        if Doc.Contains('compression') then
         begin
           Compressions := Doc['compression'].AsBsonArray;
           for I := 0 to Compressions.Count - 1 do
