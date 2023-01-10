@@ -335,8 +335,14 @@ type
       var Name: string; var data: TArray<tBytes>): tgoPayloadDecodeResult;
   end;
 
-  tgoReplyValidationResult = (rvrOK, rvrNoHeader, rvrOpcodeInvalid, rvrCompressorNotSupported, rvrCompressorError, rvrGrowing,
-    rvrChecksumInvalid, rvrDataError);
+  tgoReplyValidationResult = (rvrOK, // Message decoded successfully
+    rvrNoHeader, // Not enough bytes received for a header
+    rvrOpcodeInvalid, // Invalid opcode in header
+    rvrGrowing, // Message not complete yet, still growing in reception buffer
+    rvrCompressorNotSupported, // do not know this compression algorithm
+    rvrCompressorError, // unable to decompress, error
+    rvrChecksumInvalid, // to be implemented
+    rvrDataError); // decoding of message failed, badly formatted or data corruption
 
   { Implements IgoMongoReply - it is an OP_MSG sent by the server to the client. }
   TgoMongoMsgReply = class(TInterfacedObject, IgoMongoReply)
@@ -900,9 +906,7 @@ begin
       move(Output[0], q.DataStart^, length(Output));
     end;
   end
-  else
-
-    if fknowsZlib then
+  else if fknowsZlib then
   begin
     if tZlibCompressor.Compress(h.DataStart, DataSize, compressedsize, Output) then
     begin
@@ -984,10 +988,9 @@ begin
       Writer.WriteString('architecture', 'arm64');
     end;
     Writer.WriteString('version', Format('%d.%d.%d', [tosVersion.Major, tosVersion.Minor, tosVersion.Build]));
-    Writer.WriteEndDocument;  // os}
+    Writer.WriteEndDocument; // os}
     Writer.WriteString('platform', 'Delphi');
-    Writer.WriteEndDocument; //  client}
-
+    Writer.WriteEndDocument; // client}
 
     if (FSettings.UseSnappyCompression and Snappy_Implemented) or (FSettings.UseZlibCompression and ZLIB_Implemented) then
     begin
@@ -996,7 +999,7 @@ begin
         Writer.WriteString('snappy');
       if (FSettings.UseZlibCompression and ZLIB_Implemented) then
         Writer.WriteString('zlib');
-      Writer.WriteEndArray {compression};
+      Writer.WriteEndArray { compression };
       Writer.WriteEndDocument; // main doc}
     end;
 
@@ -1182,22 +1185,22 @@ end;
 function TgoMongoProtocol.WaitForReply(const ARequestId: Integer): IgoMongoReply;
 var
   Start, LastRecv: tStopWatch;
+  ms: Int64;
 begin
-  { TODO : Handle per-request timeout as in find.maxTimeMS }
+  { TODO : Handle per-request timeout as in findoptions.maxTimeMS }
   result := nil;
   Start := ThisMoment;
+  ms := 0;
   while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, result)) do
   begin
-    if LastPartialReply(ARequestId, LastRecv) then
-    begin
-      if (LastRecv.ElapsedMilliseconds > FSettings.ReplyTimeout) then
-        Break;
-    end
-    else // reply is nowhere to be found, do not poll longer than "FSettings.ReplyTimeout"
-    begin
-      if Start.ElapsedMilliseconds > FSettings.ReplyTimeout then
-        Break;
-    end;
+    if LastPartialReply(ARequestId, LastRecv) then // have partial reply ?
+      ms := LastRecv.ElapsedMilliseconds // number of milliseconds "radiosilence" in large response
+    else // no partial reply either
+      ms := Start.ElapsedMilliseconds;
+
+    if ms > FSettings.ReplyTimeout then
+      Break;
+
     Sleep(5);
   end;
 
@@ -1233,7 +1236,7 @@ end;
 procedure TgoMongoProtocol.SocketRecv(const ABuffer: Pointer; const ASize: Integer);
 var
   MongoReply: IgoMongoReply;
-  ProcessedBytes,BytesLeft: Integer;
+  ProcessedBytes, BytesLeft: Integer;
   MsgHeader: TMsgHeader;
 begin
   FRecvBufferLock.Enter;
@@ -1268,10 +1271,16 @@ begin
               FRecvSize := 0
             else
             begin
-              BytesLeft:=fRecvSize - ProcessedBytes;
-              move(FRecvBuffer[ProcessedBytes], FRecvBuffer[0], BytesLeft);
-              FRecvSize:=BytesLeft;
+              BytesLeft := FRecvSize - ProcessedBytes;
+              if BytesLeft > 0 then // should always be true
+              begin
+                move(FRecvBuffer[ProcessedBytes], FRecvBuffer[0], BytesLeft);
+                FRecvSize := BytesLeft;
+              end
+              else
+                FRecvSize := 0;
             end;
+            { TODO : Faster wakeup of waiting thread ??? }
           end;
 
         tgoReplyValidationResult.rvrGrowing:
@@ -1499,16 +1508,16 @@ begin
             end
             // Message decodes OK. All is well.
             else
-              result := tgoReplyValidationResult.rvrDataError; // Header opcode OK, message could be complete, decoding fails
+              result := tgoReplyValidationResult.rvrDataError; // Header opcode OK, message could be complete, but decoding fails
           end // if checksum OK
           else
             result := tgoReplyValidationResult.rvrChecksumInvalid; // Header opcode OK, message could be complete, CRC fails
         end // if aSize big enough for data
         else
-          result := tgoReplyValidationResult.rvrGrowing; // Header opcode OK, but message not complete (yet)
+          result := tgoReplyValidationResult.rvrGrowing; // Header opcode OK, but message not complete yet
       end // if valid opcode
       else
-        result := tgoReplyValidationResult.rvrOpcodeInvalid; // Enough bytes for a header, but opcode invalid
+        result := tgoReplyValidationResult.rvrOpcodeInvalid; // Invalid header, opcode unknown
     end // if enough bytes for a header
     else
       result := tgoReplyValidationResult.rvrNoHeader; // Buffer does not contain enough bytes for a header
@@ -1536,7 +1545,7 @@ begin
   if (ASize >= sizeof(TMsgHeader)) then
   begin
     Source := @ABuffer[0];
-    if Source.Header.Compressed then
+    if Source.Header.Compressed then // has a VALID op_compressed opcode
     begin
       if ASize < Source.Header.MessageLength then
         Exit(tgoReplyValidationResult.rvrGrowing);
@@ -1579,10 +1588,10 @@ begin
         aSizeRead := Source.Header.MessageLength; // Bytes to discard!
     end // if compressed
     else
-      result := ValidateOPMessage(ABuffer, ASize, aSizeRead, AReply); // uncompressed!
+      result := ValidateOPMessage(ABuffer, ASize, aSizeRead, AReply); // uncompressed or TRASH
   end
   else
-    result := tgoReplyValidationResult.rvrNoHeader;
+    result := tgoReplyValidationResult.rvrNoHeader; // not enough bytes for a header
 
 end;
 

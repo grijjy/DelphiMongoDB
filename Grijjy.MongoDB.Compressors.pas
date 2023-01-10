@@ -21,7 +21,6 @@ type
   end;
 
   // currently support Snappy only under Windows
-type
   tSnappyCompressor = class
     class function Compress(adata: Pointer; aUncompressedSize: Integer; var aCompressedSize: Integer; var Output: tBytes): Boolean;
     class function Expand(adata: Pointer; aCompressedSize, aUncompressedSize: Integer; OutputBuffer: Pointer): Boolean;
