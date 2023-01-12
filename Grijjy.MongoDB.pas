@@ -789,6 +789,9 @@ implementation
 uses
   System.Math;
 
+CONST
+   NoCursorID=0;
+
 {$POINTERMATH ON}
 
 { If no reply was received within timeout seconds, throw an exception }
@@ -994,26 +997,31 @@ var
   Docs: TgoBsonArray;
   InitialPage: TArray<TBytes>;
 begin
-  Result := nil;
   if not ADoc.IsNil then
   begin
     if HasCursor(ADoc, Cursor, CursorID, Namespace) then
     begin
       if (Cursor.TryGetValue('firstBatch', Value)) then
       begin
-        Docs := Value.AsBsonArray; // tgoBSONArray
+        //Note: The firstBatch array may be an empty resultset.
+        Docs := Value.AsBsonArray;
         SetLength(InitialPage, Docs.Count);
         for I := 0 to Docs.Count - 1 do
           InitialPage[I] := Docs[I].AsBsonDocument.ToBson;
         Result := TgoMongoCursor.Create(AProtocol, AReadPreference, Namespace, InitialPage, CursorID);
       end;
     end
-    else // Just return a cursor with this one document
+    else // Some admin queries return just one document
     begin
       SetLength(InitialPage, 1);
       InitialPage[0] := ADoc.ToBson;
-      Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, 0);
+      Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, NoCursorID);
     end;
+  end else
+  begin
+    //Empty Cursor
+    setlength(initialpage,0);
+    Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, NoCursorID);
   end;
 end;
 
@@ -1729,10 +1737,10 @@ begin
   Result := (FIndex < (Length(FPage) - 1));
   if Result then
     Inc(FIndex)
-  else if (FCursorId <> 0) then
+  else if (FCursorId <> NoCursorID) then
   begin
     { Get next page from server.
-      Note: if FCursorId = 0, then all documents did fit in the reply, so there
+      Note: if FCursorId = NoCursorID, then all documents did fit in the reply, so there
       is no need to get more data from the server. }
     GetMore;
     Result := (FPage <> nil);
