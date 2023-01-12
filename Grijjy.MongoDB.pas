@@ -114,6 +114,8 @@ type
   end;
 
 const
+  MongoDefBatchSize=101;
+
   { MongoDB collation default settings
     https://docs.mongodb.com/manual/reference/collation-locales-defaults/#collation-languages-locales }
   DEFAULTTGOMONGOCOLLATION: TgoMongoCollation = (Locale: 'en'; CaseLevel: false; CaseFirst: TgoMongoCollationCaseFirst.ccfOff; Strength: 1;
@@ -368,6 +370,8 @@ type
     the class factory is function "findOptions" }
   igoMongoFindOptions = interface
     ['{5E3602BD-90EE-493A-9A91-50E7209707E4}']
+    function getfilter:tgoMongoFilter;
+    function getbatchSize:Integer;
     { Filter: Optional. The query predicate. If unspecified, then all documents
       in the collection will match the predicate. }
     function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
@@ -560,7 +564,7 @@ type
       be empty if there are no documents that match the filter.
       Enumerating over the result may trigger additional calls to the MongoDB
       server. }
-
+    function EmptyCursor: igoMongoCursor;
     function Find(AOptions: igoMongoFindOptions): igoMongoCursor; overload;
     function Find: igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
@@ -811,7 +815,7 @@ var
   ErrorCode: TgoMongoErrorCode;
   ErrorMsg: string;
 begin
-  HandleTimeout(AReply);
+  HandleTimeout(AReply);   {Exception if timeout}
 
   Doc := AReply.FirstDoc;
   if Doc.IsNil then
@@ -987,6 +991,8 @@ begin
   end;
 end;
 
+
+
 function CreateCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol; AReadPreference: tgoMongoReadPreference): igoMongoCursor;
 var
   Cursor: TgoBsonDocument;
@@ -1024,6 +1030,8 @@ begin
     Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, NoCursorID);
   end;
 end;
+
+
 
 function ExhaustCursor(const aCursor: igoMongoCursor): TArray<TgoBsonDocument>;
 begin
@@ -1069,10 +1077,9 @@ type
     function UpdateOne(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false): Boolean;
     function UpdateMany(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
       const AOrdered: Boolean = True): Integer;
-
+    function EmptyCursor: igoMongoCursor;
     function Find: igoMongoCursor; overload;
     function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-
     function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
     function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
@@ -1792,6 +1799,13 @@ end;
 
 { TgoMongoCollection }
 
+function TgoMongoCollection.EmptyCursor: igoMongoCursor;
+var doc:tgoBsondocument;
+begin
+  doc.SetNil;
+  Result:=CreateCursor(Doc, fprotocol,FProtocol.GlobalReadPreference);
+end;
+
 procedure TgoMongoCollection.SetReadPreference(const Value: tgoMongoReadPreference);
 begin
   FReadPreference := Value;
@@ -1926,6 +1940,7 @@ begin
   Reply := FProtocol.OpMsg(Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 0);
 end;
+
 
 function TgoMongoCollection.ListIndexNames: TArray<string>;
 // https://docs.mongodb.com/manual/reference/command/listIndexes/
@@ -2389,7 +2404,9 @@ type
   tgoMongoFindOptions = class(TInterfacedObject, igoMongoFindOptions)
   private
     foptions: tgoMongoFindOptionsRec;
+    function getbatchSize:Integer;
     function getOptions: tgoMongoFindOptionsRec;
+    function getfilter:tgoMongoFilter;
     function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
     function filter(const aJsonDoc: string): igoMongoFindOptions; overload;
     function sort(const AValue: TgoMongoSort): igoMongoFindOptions; overload;
@@ -2471,7 +2488,7 @@ begin
   inherited Create;
   // foptions is a "member" and should already be completely filled with 0. We just make sure ...
   fillchar(foptions, sizeof(foptions), 0);
-  foptions.batchSize := 101;
+  foptions.batchSize := MongoDefBatchSize;
 end;
 
 function tgoMongoFindOptions.filter(const aJsonDoc: string): igoMongoFindOptions;
@@ -2486,6 +2503,16 @@ begin
   else
     foptions.filter.SetNil;
   Result := Self;
+end;
+
+function tgoMongoFindOptions.getbatchSize: Integer;
+begin
+   result:=fOptions.batchSize;
+end;
+
+function tgoMongoFindOptions.getfilter: tgoMongoFilter;
+begin
+  result:=foptions.filter;
 end;
 
 function tgoMongoFindOptions.getOptions: tgoMongoFindOptionsRec;
