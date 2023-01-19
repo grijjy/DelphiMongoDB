@@ -2138,7 +2138,6 @@ begin
   Remaining := ACount;
   index := 0;
   Result := 0;
-  BytesEncoded := 0;
   while (Remaining > 0) do
   begin
     ItemsInBatch := min(Remaining, FProtocol.MaxWriteBatchSize);
@@ -2405,7 +2404,6 @@ type
   private
     foptions: tgoMongoFindOptionsRec;
     function getbatchSize:Integer;
-    function getOptions: tgoMongoFindOptionsRec;
     function getfilter:tgoMongoFilter;
     function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
     function filter(const aJsonDoc: string): igoMongoFindOptions; overload;
@@ -2515,10 +2513,6 @@ begin
   result:=foptions.filter;
 end;
 
-function tgoMongoFindOptions.getOptions: tgoMongoFindOptionsRec;
-begin
-  Result := foptions;
-end;
 
 function tgoMongoFindOptions.hint(AValue: string): igoMongoFindOptions;
 begin

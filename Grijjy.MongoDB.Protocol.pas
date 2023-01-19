@@ -1190,7 +1190,6 @@ begin
   { TODO : Handle per-request timeout as in findoptions.maxTimeMS }
   result := nil;
   Start := ThisMoment;
-  ms := 0;
   while (ConnectionState = TgoConnectionState.Connected) and (not TryGetReply(ARequestId, result)) do
   begin
     if LastPartialReply(ARequestId, LastRecv) then // have partial reply ?
@@ -1398,7 +1397,7 @@ begin
     // read the header
     StartOfData := sizeof(FHeader);
 
-    data := Pointer(nativeuint(ABuffer) + StartOfData);
+    data := Pointer(nativeuint(ABuffer) + nativeuint(StartOfData));
 
     Avail := FHeader.Header.MessageLength - StartOfData;
     while tMsgPayload.DecodeSequence(False, data, Avail, SizeRead, PayloadType, seqname, DocBuf) = tgoPayloadDecodeResult.pdOK do
@@ -1538,7 +1537,6 @@ var
 begin
   AReply := nil;
   aSizeRead := 0;
-  result := tgoReplyValidationResult.rvrNoHeader;
 
   { Distinguish between compressed and uncompressed messages }
 

@@ -180,7 +180,7 @@ end;
 function memcmp(p1, p2: PByte; n: Integer): Integer; cdecl;
     // This function is never called.
 var
-  I: Cardinal;
+  I: Integer;
 begin
   I := 0;
   while I < n do
