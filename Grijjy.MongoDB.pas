@@ -114,7 +114,7 @@ type
   end;
 
 const
-  MongoDefBatchSize=101;
+  MongoDefBatchSize = 101;
 
   { MongoDB collation default settings
     https://docs.mongodb.com/manual/reference/collation-locales-defaults/#collation-languages-locales }
@@ -224,7 +224,7 @@ type
 
       described here:
       https://docs.mongodb.com/manual/reference/command/isMaster/
-    }
+ }
     function GetInstanceInfo(const ASaslSupportedMechs: string = ''; const AComment: string = ''): TgoMongoInstanceInfo;
     function IsMaster: Boolean;
 
@@ -370,11 +370,11 @@ type
     the class factory is function "findOptions" }
   igoMongoFindOptions = interface
     ['{5E3602BD-90EE-493A-9A91-50E7209707E4}']
-    function getfilter:tgoMongoFilter;
-    function getbatchSize:Integer;
+    function getfilter: tgoMongoFilter;
+    function getbatchSize: Integer;
     { Filter: Optional. The query predicate. If unspecified, then all documents
       in the collection will match the predicate. }
-    function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
+    function filter(const AValue: tgoMongoFilter): igoMongoFindOptions; overload;
     function filter(const aJsonDoc: string): igoMongoFindOptions; overload;
     { Sort:Optional. The sort specification for the ordering of the results. }
     function sort(const AValue: TgoMongoSort): igoMongoFindOptions; overload;
@@ -437,6 +437,11 @@ type
     { allowDiskUse:Optional. Use this option to override allowDiskUseByDefault for a specific query. }
     function allowDiskUse(Value: Boolean): igoMongoFindOptions;
     procedure WriteOptions(const Writer: IgoBsonWriter);
+    function asBsonDocument: TgoBsonDocument;
+    function asJson: string;
+    procedure fromBson(aBson: TgoBsonDocument);
+    procedure fromJson(const aJson: string);
+
   end;
 
   { Represents a collection in a MongoDB database.
@@ -484,7 +489,7 @@ type
       Returns:
       True if a document matching the filter has been found and it has
       been successfully deleted. }
-    function DeleteOne(const AFilter: TgoMongoFilter): Boolean;
+    function DeleteOne(const AFilter: tgoMongoFilter): Boolean;
 
     { Deletes all documents that match a filter.
 
@@ -499,7 +504,7 @@ type
 
       Returns:
       The number of documents deleted. }
-    function DeleteMany(const AFilter: TgoMongoFilter; const AOrdered: Boolean = True): Integer;
+    function DeleteMany(const AFilter: tgoMongoFilter; const AOrdered: Boolean = True): Integer;
 
     { Updates a single document.
 
@@ -514,7 +519,7 @@ type
       Returns:
       True if a document matching the filter has been found and it has
       been successfully updated. }
-    function UpdateOne(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false): Boolean;
+    function UpdateOne(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false): Boolean;
 
     { Updates all documents that match a filter.
 
@@ -535,7 +540,7 @@ type
       The number of documents that match the filter. The number of documents
       that is actually updated may be less than this in case an update did
       not result in the change of one or more documents. }
-    function UpdateMany(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
+    function UpdateMany(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
       const AOrdered: Boolean = True): Integer;
 
     { Finds the documents matching the filter.
@@ -567,11 +572,11 @@ type
     function EmptyCursor: igoMongoCursor;
     function Find(AOptions: igoMongoFindOptions): igoMongoCursor; overload;
     function Find: igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
+    function Find(const AFilter: tgoMongoFilter): igoMongoCursor; overload;
     function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort; aSkip: Integer = 0)
+    function Find(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find(const AFilter: tgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
+    function Find(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort; aSkip: Integer = 0)
       : igoMongoCursor; overload;
 
     { Finds the first document matching the filter.
@@ -601,10 +606,10 @@ type
       check for this). }
 
     function FindOne(AOptions: igoMongoFindOptions): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
+    function FindOne(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
+    function FindOne(const AFilter: tgoMongoFilter): TgoBsonDocument; overload;
+    function FindOne(const AFilter: tgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
+    function FindOne(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
       : TgoBsonDocument; overload;
 
     { Counts the number of documents matching the filter.
@@ -617,7 +622,7 @@ type
       Returns:
       The number of documents that match the filter. }
     function Count: Integer; overload;
-    function Count(const AFilter: TgoMongoFilter): Integer; overload;
+    function Count(const AFilter: tgoMongoFilter): Integer; overload;
 
     { Creates an index in the current collection.
 
@@ -722,7 +727,7 @@ type
     ApplicationName: string;
 
     UseSnappyCompression: Boolean;
-    UseZlibCompression:Boolean;
+    UseZlibCompression: Boolean;
 
     GlobalReadPreference: tgoMongoReadPreference;
   public
@@ -793,8 +798,8 @@ implementation
 uses
   System.Math;
 
-CONST
-   NoCursorID=0;
+const
+  NoCursorID = 0;
 
 {$POINTERMATH ON}
 
@@ -815,7 +820,7 @@ var
   ErrorCode: TgoMongoErrorCode;
   ErrorMsg: string;
 begin
-  HandleTimeout(AReply);   {Exception if timeout}
+  HandleTimeout(AReply); { Exception if timeout }
 
   Doc := AReply.FirstDoc;
   if Doc.IsNil then
@@ -848,7 +853,7 @@ begin
       Values := Value.AsBsonArray;
       if (Values.Count > 0) then
       begin
-        ErrorDoc := Values.Items[0].AsBsonDocument;
+        ErrorDoc := Values.Items[0].asBsonDocument;
         Word(ErrorCode) := ErrorDoc['code'];
         ErrorMsg := ErrorDoc['errmsg'];
         raise EgoMongoDBWriteError.Create(ErrorCode, ErrorMsg);
@@ -858,7 +863,7 @@ begin
     { If there are no write errors either, then check for write concern error. }
     if (Doc.TryGetValue('writeConcernError', Value)) then
     begin
-      ErrorDoc := Value.AsBsonDocument;
+      ErrorDoc := Value.asBsonDocument;
       Word(ErrorCode) := ErrorDoc['code'];
       ErrorMsg := ErrorDoc['errmsg'];
       raise EgoMongoDBWriteError.Create(ErrorCode, ErrorMsg);
@@ -985,13 +990,11 @@ begin
   Result := (ADoc.TryGetValue('cursor', temp));
   if Result then
   begin
-    Cursor := temp.AsBsonDocument;
+    Cursor := temp.asBsonDocument;
     CursorID := Cursor['id']; // 0=cursor exhausted, else more data can be pulled
     Namespace := Cursor.Get('ns', '').ToString(); // databasename.CollectionNameOrCommand
   end;
 end;
-
-
 
 function CreateCursor(const ADoc: TgoBsonDocument; AProtocol: TgoMongoProtocol; AReadPreference: tgoMongoReadPreference): igoMongoCursor;
 var
@@ -1009,11 +1012,11 @@ begin
     begin
       if (Cursor.TryGetValue('firstBatch', Value)) then
       begin
-        //Note: The firstBatch array may be an empty resultset.
+        // Note: The firstBatch array may be an empty resultset.
         Docs := Value.AsBsonArray;
         SetLength(InitialPage, Docs.Count);
         for I := 0 to Docs.Count - 1 do
-          InitialPage[I] := Docs[I].AsBsonDocument.ToBson;
+          InitialPage[I] := Docs[I].asBsonDocument.ToBson;
         Result := TgoMongoCursor.Create(AProtocol, AReadPreference, Namespace, InitialPage, CursorID);
       end;
     end
@@ -1023,15 +1026,14 @@ begin
       InitialPage[0] := ADoc.ToBson;
       Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, NoCursorID);
     end;
-  end else
+  end
+  else
   begin
-    //Empty Cursor
-    setlength(initialpage,0);
+    // Empty Cursor
+    SetLength(InitialPage, 0);
     Result := TgoMongoCursor.Create(AProtocol, AReadPreference, 'null.null', InitialPage, NoCursorID);
   end;
 end;
-
-
 
 function ExhaustCursor(const aCursor: igoMongoCursor): TArray<TgoBsonDocument>;
 begin
@@ -1057,8 +1059,8 @@ type
     procedure SpecifyReadPreference(const AWriter: IgoBsonWriter);
 
     function InsertMany(const ADocuments: PgoBsonDocument; const ACount: Integer; const AOrdered: Boolean): Integer; overload;
-    function Delete(const AFilter: TgoMongoFilter; const AOrdered: Boolean; const ALimit: Integer): Integer;
-    function Update(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert, AOrdered, AMulti: Boolean): Integer;
+    function Delete(const AFilter: tgoMongoFilter; const AOrdered: Boolean; const ALimit: Integer): Integer;
+    function Update(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert, AOrdered, AMulti: Boolean): Integer;
     function GetReadPreference: tgoMongoReadPreference;
     procedure SetReadPreference(const Value: tgoMongoReadPreference);
   protected
@@ -1071,31 +1073,31 @@ type
     function InsertMany(const ADocuments: TArray<TgoBsonDocument>; const AOrdered: Boolean = True): Integer; overload;
     function InsertMany(const ADocuments: TEnumerable<TgoBsonDocument>; const AOrdered: Boolean = True): Integer; overload;
 
-    function DeleteOne(const AFilter: TgoMongoFilter): Boolean;
-    function DeleteMany(const AFilter: TgoMongoFilter; const AOrdered: Boolean = True): Integer;
+    function DeleteOne(const AFilter: tgoMongoFilter): Boolean;
+    function DeleteMany(const AFilter: tgoMongoFilter; const AOrdered: Boolean = True): Integer;
 
-    function UpdateOne(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false): Boolean;
-    function UpdateMany(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
+    function UpdateOne(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false): Boolean;
+    function UpdateMany(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean = false;
       const AOrdered: Boolean = True): Integer;
     function EmptyCursor: igoMongoCursor;
     function Find: igoMongoCursor; overload;
     function Find(const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
-    function Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort; aSkip: Integer = 0)
+    function Find(const AFilter: tgoMongoFilter): igoMongoCursor; overload;
+    function Find(const AFilter: tgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor; overload;
+    function Find(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor; overload;
+    function Find(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort; aSkip: Integer = 0)
       : igoMongoCursor; overload;
 
     function Find(AOptions: igoMongoFindOptions): igoMongoCursor; overload;
     function FindOne(AOptions: igoMongoFindOptions): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
-    function FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
+    function FindOne(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument; overload;
+    function FindOne(const AFilter: tgoMongoFilter): TgoBsonDocument; overload;
+    function FindOne(const AFilter: tgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument; overload;
+    function FindOne(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
       : TgoBsonDocument; overload;
 
     function Count: Integer; overload;
-    function Count(const AFilter: TgoMongoFilter): Integer; overload;
+    function Count(const AFilter: tgoMongoFilter): Integer; overload;
 
     function CreateIndex(const AName: string; const AKeyFields: array of string; const AUnique: Boolean = false): Boolean;
     function CreateTextIndex(const AName: string; const AFields: array of string; const ALanguageOverwriteField: string = '';
@@ -1122,7 +1124,7 @@ end;
 
 class function TgoMongoClientSettings.Create: TgoMongoClientSettings;
 begin
-  Fillchar(result, sizeof(result),0);
+  Fillchar(Result, sizeof(Result), 0);
   Result.ConnectionTimeout := 5000;
   Result.ReplyTimeout := 5000;
   Result.QueryFlags := [];
@@ -1136,7 +1138,7 @@ begin
   Result.Password := '';
   Result.GlobalReadPreference := tgoMongoReadPreference.Primary;
   Result.ApplicationName := '';
-  Result.UseSnappyCompression := true;  //snappy has priority over zlib if both are set
+  Result.UseSnappyCompression := True; // snappy has priority over zlib if both are set
   Result.UseZlibCompression := false;
 end;
 
@@ -1168,9 +1170,8 @@ begin
   S.Password := ASettings.Password;
   S.ApplicationName := ASettings.ApplicationName;
 
-  s.UseSnappyCompression:=asettings.UseSnappyCompression;
-  s.UseZlibCompression:=asettings.UseZlibCompression;
-
+  S.UseSnappyCompression := ASettings.UseSnappyCompression;
+  S.UseZlibCompression := ASettings.UseZlibCompression;
 
   FProtocol := TgoMongoProtocol.Create(AHost, APort, S);
 end;
@@ -1235,7 +1236,7 @@ begin
   Writer.WriteString('$db', DB_ADMIN);
   { TODO : Readpreference??? }
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   Doc := Reply.FirstDoc;
   if not Doc.IsNil then
@@ -1245,7 +1246,7 @@ begin
       Databases := Value.AsBsonArray;
       SetLength(Result, Databases.Count);
       for I := 0 to Databases.Count - 1 do
-        Result[I] := Databases[I].AsBsonDocument;
+        Result[I] := Databases[I].asBsonDocument;
     end;
   end;
 end;
@@ -1772,7 +1773,7 @@ begin
   SpecifyDB(Writer);
   SpecifyReadPreference(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   HandleTimeout(Reply);
   FIndex := 0;
   SetLength(FPage, 0);
@@ -1781,7 +1782,7 @@ begin
   begin
     if ADoc.Contains('cursor') then
     begin
-      Cursor := ADoc['cursor'].AsBsonDocument;
+      Cursor := ADoc['cursor'].asBsonDocument;
       // The cursor ID should become 0 when it is exhausted
       FCursorId := Cursor['id']; // less overhead to do it here, than query reply.cursorid
       // Namespace:=Cursor.Get('ns','').ToString();   --> does not change
@@ -1790,7 +1791,7 @@ begin
       I := 0;
       for Value in Docs do
       begin
-        FPage[I] := Value.AsBsonDocument.ToBson;
+        FPage[I] := Value.asBsonDocument.ToBson;
         Inc(I);
       end;
     end;
@@ -1800,10 +1801,10 @@ end;
 { TgoMongoCollection }
 
 function TgoMongoCollection.EmptyCursor: igoMongoCursor;
-var doc:tgoBsondocument;
+var Doc: TgoBsonDocument;
 begin
-  doc.SetNil;
-  Result:=CreateCursor(Doc, fprotocol,FProtocol.GlobalReadPreference);
+  Doc.SetNil;
+  Result := CreateCursor(Doc, FProtocol, FProtocol.GlobalReadPreference);
 end;
 
 procedure TgoMongoCollection.SetReadPreference(const Value: tgoMongoReadPreference);
@@ -1828,10 +1829,10 @@ end;
 
 function TgoMongoCollection.Count: Integer;
 begin
-  Result := Count(TgoMongoFilter.Empty);
+  Result := Count(tgoMongoFilter.Empty);
 end;
 
-function TgoMongoCollection.Count(const AFilter: TgoMongoFilter): Integer;
+function TgoMongoCollection.Count(const AFilter: tgoMongoFilter): Integer;
 var
   Writer: IgoBsonWriter;
   Reply: IgoMongoReply;
@@ -1941,7 +1942,6 @@ begin
   Result := (HandleCommandReply(Reply) = 0);
 end;
 
-
 function TgoMongoCollection.ListIndexNames: TArray<string>;
 // https://docs.mongodb.com/manual/reference/command/listIndexes/
 var
@@ -1986,7 +1986,7 @@ begin
   Result := ExhaustCursor(CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference));
 end;
 
-function TgoMongoCollection.Delete(const AFilter: TgoMongoFilter; const AOrdered: Boolean; const ALimit: Integer): Integer;
+function TgoMongoCollection.Delete(const AFilter: tgoMongoFilter; const AOrdered: Boolean; const ALimit: Integer): Integer;
 // https://docs.mongodb.com/manual/reference/command/delete/
 var
   Writer: IgoBsonWriter;
@@ -2010,12 +2010,12 @@ begin
   Result := HandleCommandReply(Reply);
 end;
 
-function TgoMongoCollection.DeleteMany(const AFilter: TgoMongoFilter; const AOrdered: Boolean): Integer;
+function TgoMongoCollection.DeleteMany(const AFilter: tgoMongoFilter; const AOrdered: Boolean): Integer;
 begin
   Result := Delete(AFilter, AOrdered, 0);
 end;
 
-function TgoMongoCollection.DeleteOne(const AFilter: TgoMongoFilter): Boolean;
+function TgoMongoCollection.DeleteOne(const AFilter: tgoMongoFilter): Boolean;
 begin
   Result := (Delete(AFilter, True, 1) = 1);
 end;
@@ -2025,12 +2025,12 @@ begin
   Result := Find(FindOptions);
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter): igoMongoCursor;
+function TgoMongoCollection.Find(const AFilter: tgoMongoFilter): igoMongoCursor;
 begin
   Result := Find(FindOptions.filter(AFilter));
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor;
+function TgoMongoCollection.Find(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection): igoMongoCursor;
 begin
   Result := Find(FindOptions.filter(AFilter).projection(AProjection));
 end;
@@ -2040,13 +2040,13 @@ begin
   Result := Find(FindOptions.projection(AProjection));
 end;
 
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor;
+function TgoMongoCollection.Find(const AFilter: tgoMongoFilter; const ASort: TgoMongoSort): igoMongoCursor;
 begin
   Result := Find(FindOptions.filter(AFilter).sort(ASort));
 end;
 
 // https://docs.mongodb.com/manual/reference/method/db.collection.find
-function TgoMongoCollection.Find(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
+function TgoMongoCollection.Find(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort;
 aSkip: Integer = 0): igoMongoCursor;
 begin
   Result := Find(FindOptions.filter(AFilter).projection(AProjection).sort(ASort).skip(aSkip));
@@ -2065,7 +2065,7 @@ begin
   SpecifyReadPreference(Writer);
   AOptions.WriteOptions(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   HandleCommandReply(Reply);
   Result := CreateCursor(Reply.FirstDoc, FProtocol, GetReadPreference);
 end;
@@ -2080,23 +2080,23 @@ begin
     Result := Docs[0];
 end;
 
-function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
+function TgoMongoCollection.FindOne(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection; const ASort: TgoMongoSort)
   : TgoBsonDocument;
 begin
   Result := FindOne(FindOptions.filter(AFilter).projection(AProjection).sort(ASort));
 end;
 
-function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument;
+function TgoMongoCollection.FindOne(const AFilter: tgoMongoFilter; const AProjection: TgoMongoProjection): TgoBsonDocument;
 begin
   Result := FindOne(FindOptions.filter(AFilter).projection(AProjection));
 end;
 
-function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter): TgoBsonDocument;
+function TgoMongoCollection.FindOne(const AFilter: tgoMongoFilter): TgoBsonDocument;
 begin
   Result := FindOne(FindOptions.filter(AFilter));
 end;
 
-function TgoMongoCollection.FindOne(const AFilter: TgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument;
+function TgoMongoCollection.FindOne(const AFilter: tgoMongoFilter; const ASort: TgoMongoSort): TgoBsonDocument;
 begin
   Result := FindOne(FindOptions.filter(AFilter).sort(ASort));
 end;
@@ -2161,7 +2161,7 @@ begin
       Dec(Remaining);
       end;
       Writer.WriteEndArray;
-    *)
+ *)
 
     Writer.WriteBoolean('ordered', AOrdered);
     AddWriteConcern(Writer);
@@ -2193,7 +2193,7 @@ begin
       dec(Remaining);
     end; // FOR
 
-    Reply := FProtocol.OpMsg(True,Payload0, Payload1);
+    Reply := FProtocol.OpMsg(True, Payload0, Payload1);
     Inc(Result, HandleCommandReply(Reply));
   end; // While
   Assert(index = ACount);
@@ -2220,11 +2220,11 @@ begin
   Writer.WriteEndArray;
   AddWriteConcern(Writer);
   Writer.WriteEndDocument;
-  Reply := FProtocol.OpMsg(True,Writer.ToBson, nil);
+  Reply := FProtocol.OpMsg(True, Writer.ToBson, nil);
   Result := (HandleCommandReply(Reply) = 1);
 end;
 
-function TgoMongoCollection.Update(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate;
+function TgoMongoCollection.Update(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate;
 const AUpsert, AOrdered, AMulti: Boolean): Integer;
 // https://docs.mongodb.com/manual/reference/command/update
 var
@@ -2253,13 +2253,13 @@ begin
   Result := HandleCommandReply(Reply);
 end;
 
-function TgoMongoCollection.UpdateMany(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate;
+function TgoMongoCollection.UpdateMany(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate;
 const AUpsert, AOrdered: Boolean): Integer;
 begin
   Result := Update(AFilter, AUpdate, AUpsert, AOrdered, True);
 end;
 
-function TgoMongoCollection.UpdateOne(const AFilter: TgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean): Boolean;
+function TgoMongoCollection.UpdateOne(const AFilter: tgoMongoFilter; const AUpdate: TgoMongoUpdate; const AUpsert: Boolean): Boolean;
 begin
   Result := (Update(AFilter, AUpdate, AUpsert, false, false) = 1);
 end;
@@ -2395,7 +2395,13 @@ type
     readConcern: TgoBsonDocument;
     hint: string;
     comment: string;
+    procedure clear;
+
     procedure WriteOptions(const Writer: IgoBsonWriter);
+    function asBsonDocument: TgoBsonDocument;
+    function asJson: string;
+    procedure fromBson(aBson: TgoBsonDocument);
+    procedure fromJson(const aJson: string);
   end;
 
   { Class that implements fluent interface igoMongoFindOptions }
@@ -2403,9 +2409,9 @@ type
   tgoMongoFindOptions = class(TInterfacedObject, igoMongoFindOptions)
   private
     foptions: tgoMongoFindOptionsRec;
-    function getbatchSize:Integer;
-    function getfilter:tgoMongoFilter;
-    function filter(const AValue: TgoMongoFilter): igoMongoFindOptions; overload;
+    function getbatchSize: Integer;
+    function getfilter: tgoMongoFilter;
+    function filter(const AValue: tgoMongoFilter): igoMongoFindOptions; overload;
     function filter(const aJsonDoc: string): igoMongoFindOptions; overload;
     function sort(const AValue: TgoMongoSort): igoMongoFindOptions; overload;
     function sort(const aJsonDoc: string): igoMongoFindOptions; overload;
@@ -2433,6 +2439,11 @@ type
     function allowDiskUse(AValue: Boolean): igoMongoFindOptions;
     procedure WriteOptions(const Writer: IgoBsonWriter);
     function parse(const aJsonDoc: string; var Bson: TgoBsonDocument): igoMongoFindOptions;
+    function asBsonDocument: TgoBsonDocument;
+    function asJson: string;
+    procedure fromBson(aBson: TgoBsonDocument);
+    procedure fromJson(const aJson: string);
+
   public
     constructor Create;
   end;
@@ -2447,6 +2458,16 @@ function tgoMongoFindOptions.allowPartialResults(AValue: Boolean): igoMongoFindO
 begin
   foptions.allowPartialResults := AValue;
   Result := Self;
+end;
+
+function tgoMongoFindOptions.asBsonDocument: TgoBsonDocument;
+begin
+  Result := foptions.asBsonDocument;
+end;
+
+function tgoMongoFindOptions.asJson: string;
+begin
+  Result := foptions.asJson;
 end;
 
 function tgoMongoFindOptions.batchSize(AValue: Integer): igoMongoFindOptions;
@@ -2485,7 +2506,7 @@ constructor tgoMongoFindOptions.Create;
 begin
   inherited Create;
   // foptions is a "member" and should already be completely filled with 0. We just make sure ...
-  fillchar(foptions, sizeof(foptions), 0);
+  Fillchar(foptions, sizeof(foptions), 0);
   foptions.batchSize := MongoDefBatchSize;
 end;
 
@@ -2494,7 +2515,17 @@ begin
   Result := parse(aJsonDoc, foptions.filter);
 end;
 
-function tgoMongoFindOptions.filter(const AValue: TgoMongoFilter): igoMongoFindOptions;
+procedure tgoMongoFindOptions.fromBson(aBson: TgoBsonDocument);
+begin
+  foptions.fromBson(aBson);
+end;
+
+procedure tgoMongoFindOptions.fromJson(const aJson: string);
+begin
+  foptions.fromJson(aJson);
+end;
+
+function tgoMongoFindOptions.filter(const AValue: tgoMongoFilter): igoMongoFindOptions;
 begin
   if not AValue.IsNil then
     foptions.filter := AValue.Render
@@ -2505,14 +2536,13 @@ end;
 
 function tgoMongoFindOptions.getbatchSize: Integer;
 begin
-   result:=fOptions.batchSize;
+  Result := foptions.batchSize;
 end;
 
 function tgoMongoFindOptions.getfilter: tgoMongoFilter;
 begin
-  result:=foptions.filter;
+  Result := foptions.filter;
 end;
-
 
 function tgoMongoFindOptions.hint(AValue: string): igoMongoFindOptions;
 begin
@@ -2634,6 +2664,75 @@ begin
 end;
 
 // *********************************
+
+procedure tgoMongoFindOptionsRec.clear;
+begin
+  finalize(Self); // dispose of existing strings and interfaces  - avoid memory leak
+  Fillchar(Self, sizeof(Self), 0);
+  batchSize := MongoDefBatchSize;
+end;
+
+function tgoMongoFindOptionsRec.asBsonDocument: TgoBsonDocument;
+var Writer: IgoBsonWriter;
+begin
+  Writer := TgoBsonWriter.Create;
+  Writer.WriteStartDocument;
+  WriteOptions(Writer);
+  Writer.WriteEndDocument;
+  Result := TgoBsonDocument.Load(Writer.ToBson);
+end;
+
+function tgoMongoFindOptionsRec.asJson: string;
+var Bson: TgoBsonDocument;
+begin
+  Bson := asBsonDocument;
+  Result := Bson.ToJson;
+end;
+
+procedure tgoMongoFindOptionsRec.fromBson(aBson: TgoBsonDocument);
+begin
+  clear;
+  skip := aBson['skip'];
+  limit := aBson['limit'];
+  maxTimeMS := aBson['maxTimeMS'];
+  singleBatch := aBson['singleBatch'];
+  returnKey := aBson['returnKey'];
+  showRecordId := aBson['showRecordID'];
+  noCursorTimeout := aBson['noCursorTimeout'];
+  allowDiskUse := aBson['allowDiskUse'];
+  allowPartialResults := aBson['allowPartialResults'];
+
+  if aBson.Contains('hint') then
+    hint := aBson['hint'];
+
+  if aBson.Contains('comment') then
+    comment := aBson['comment'];
+
+  if aBson.Contains('batchSize') then
+    batchSize := aBson['batchSize'];
+  if aBson.Contains('filter') then
+    filter := aBson['filter'].asBsonDocument;
+  if aBson.Contains('sort') then
+    sort := aBson['sort'].asBsonDocument;
+  if aBson.Contains('min') then
+    min := aBson['min'].asBsonDocument;
+  if aBson.Contains('max') then
+    max := aBson['max'].asBsonDocument;
+  if aBson.Contains('projection') then
+    projection := aBson['projection'].asBsonDocument;
+  if aBson.Contains('collation') then
+    collation := aBson['collation'].asBsonDocument;
+  if aBson.Contains('readConcern') then
+    readConcern := aBson['readConcern'].asBsonDocument;
+end;
+
+procedure tgoMongoFindOptionsRec.fromJson(const aJson: string);
+var Bson: TgoBsonDocument; reader: igojsonreader;
+begin
+  reader := tgojsonreader.Create(aJson, false);
+  Bson := reader.ReadDocument;
+  fromBson(Bson);
+end;
 
 procedure tgoMongoFindOptionsRec.WriteOptions(const Writer: IgoBsonWriter);
 begin
