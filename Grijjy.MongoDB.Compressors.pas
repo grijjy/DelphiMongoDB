@@ -4,10 +4,10 @@ interface
 
 uses system.SysUtils, system.ZLib, Snappy;
 
+function Snappy_Implemented: Boolean;
 
-Const Snappy_Implemented=Snappy.Snappy_implemented;
-      ZLIB_Implemented=True;
-
+const
+  ZLIB_Implemented = True;
 
 type
   tNoopCompressor = class
@@ -30,15 +30,19 @@ implementation
 
 {$HINTS OFF}
 
+function Snappy_Implemented: Boolean;
+begin
+  result := Snappy.Snappy_Implemented;
+end;
+
 class function tSnappyCompressor.Compress(adata: Pointer; aUncompressedSize: Integer; var aCompressedSize: Integer;
   var Output: tBytes): Boolean;
 var
-  outsize: Integer;
-  outbuffer: Pointer;
+  OutSize: Integer;
+  OutBuffer: Pointer;
 var
-  env: snappy_env;
-  outlen: NativeUInt;
-  status: Snappy_Status;
+  OutLen: NativeUInt;
+  Status: Snappy_Status;
 begin
   result := false;
   if Snappy_Implemented then
@@ -47,15 +51,14 @@ begin
       Exit
     else
     begin
-      status := snappy_init_env(@env);
+      outlen := snappy_max_compressed_length(aUncompressedSize);
+      setlength(Output, outlen);
+      status := snappy_compress(adata, aUncompressedSize, @Output[0], outlen);
       if status = Snappy_OK then
       begin
-        setlength(Output, snappy_max_compressed_length(aUncompressedSize));
-        snappy_compress(@env, adata, aUncompressedSize, @Output[0], @outlen);
-        snappy_free_env(@env);
         aCompressedSize := outlen;
-        setlength(Output, aCompressedSize);
-        result := true;
+        setlength(Output, aCompressedSize); // truncate
+        result := True;
       end;
     end;
   end;
@@ -63,8 +66,9 @@ end;
 
 class function tSnappyCompressor.Expand(adata: Pointer; aCompressedSize, aUncompressedSize: Integer; OutputBuffer: Pointer): Boolean;
 var
-  expandedsize, temp: NativeUInt;
+  ExpandedSize: NativeUInt;
   tempbuffer: tBytes;
+  status: Snappy_Status;
 begin
   result := false;
   if Snappy_Implemented then
@@ -73,15 +77,18 @@ begin
       Exit(false)
     else
     begin
-      result:= snappy_uncompressed_length(adata, aCompressedSize, @expandedsize);
+      status := snappy_uncompressed_length(adata, aCompressedSize, ExpandedSize);
+      result := (status = Snappy_OK);
       if result then
       begin
-        result := (expandedsize = aUncompressedSize);
+        result := (ExpandedSize = aUncompressedSize);
         if result then
         begin
-          setlength(tempbuffer, expandedsize);
-          temp := snappy_uncompress(adata, aCompressedSize, @tempbuffer[0]);
-          Move(tempbuffer[0], OutputBuffer^, expandedsize);
+          setlength(tempbuffer, ExpandedSize);
+          status := snappy_uncompress(adata, aCompressedSize, @tempbuffer[0], ExpandedSize);
+          result := (status = Snappy_OK);
+          if result then
+            Move(tempbuffer[0], OutputBuffer^, ExpandedSize);
         end;
       end;
     end;
@@ -94,40 +101,40 @@ begin
   aCompressedSize := aUncompressedSize;
   setlength(Output, aUncompressedSize);
   Move(adata^, Output[0], aUncompressedSize);
-  result := true;
+  result := True;
 end;
 
 class function tNoopCompressor.Expand(adata: Pointer; aCompressedSize, aUncompressedSize: Integer; OutputBuffer: Pointer): Boolean;
 begin
   Move(adata^, OutputBuffer^, aCompressedSize);
-  result := true;
+  result := True;
 end;
 
 class function tZlibCompressor.Compress(adata: Pointer; aUncompressedSize: Integer; var aCompressedSize: Integer;
   var Output: tBytes): Boolean;
 var
-  outsize: Integer;
-  outbuffer: Pointer;
+  OutSize: Integer;
+  OutBuffer: Pointer;
 begin
   result := false;
   if aUncompressedSize <= 0 then
     Exit
   else
   begin
-    result := true;
-    zcompress(adata, aUncompressedSize, outbuffer, aCompressedSize, clDefault);
+    result := True;
+    zcompress(adata, aUncompressedSize, OutBuffer, aCompressedSize, clDefault);
     if aCompressedSize > 0 then
     begin
       setlength(Output, aCompressedSize);
-      Move(outbuffer^, Output[0], aCompressedSize);
-      FreeMem(outbuffer);
+      Move(OutBuffer^, Output[0], aCompressedSize);
+      FreeMem(OutBuffer);
     end;
   end;
 end;
 
 class function tZlibCompressor.Expand(adata: Pointer; aCompressedSize, aUncompressedSize: Integer; OutputBuffer: Pointer): Boolean;
 var
-  expandedsize: Integer;
+  ExpandedSize: Integer;
   tempbuffer: Pointer;
 begin
   result := false;
@@ -135,12 +142,12 @@ begin
     Exit(false)
   else
   begin
-    ZDecompress(adata, aCompressedSize, tempbuffer, expandedsize, 0);
-    if expandedsize = aUncompressedSize then
+    ZDecompress(adata, aCompressedSize, tempbuffer, ExpandedSize, 0);
+    if ExpandedSize = aUncompressedSize then
     begin
       Move(tempbuffer^, OutputBuffer^, aUncompressedSize);
       FreeMem(tempbuffer);
-      result := true;
+      result := True;
     end;
   end;
 end;
